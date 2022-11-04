@@ -1,5 +1,6 @@
 const std = @import("std");
-const PoolAllocator = @import("mesh.zig").PoolAllocator;
+const pool_allocator = @import("pool_allocator.zig");
+const PoolAllocator = pool_allocator.PoolAllocator;
 
 pub fn main() !void {
     var args = std.process.args();
@@ -16,6 +17,6 @@ pub fn main() !void {
     var pool = Pool.init(arena.allocator(), 0);
     defer pool.deinit();
 
-    @import("mesh.zig").benchmarkPoolAllocatorAllocSlot(&pool, count);
+    pool_allocator.benchmarkPoolAllocatorAllocSlot(&pool, count);
 }
 
