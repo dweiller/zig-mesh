@@ -3,6 +3,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const ShuffleVector = @import("shuffle_vector.zig").ShuffleVector;
+
 const page_allocator = std.heap.page_allocator;
 const page_size = std.mem.page_size;
 
@@ -135,7 +137,9 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
         const Page = struct {
             slots: [*]align(page_size) Slot,
             occupied: BitSet,
-            random: std.rand.Random,
+            shuffle: Shuffle,
+
+            const Shuffle = ShuffleVector(slot_count);
 
             const Slot = [slot_size]u8;
 
@@ -143,7 +147,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 return .{
                     .slots = @ptrCast([*]Slot, ptr),
                     .occupied = BitSet.initEmpty(),
-                    .random = random,
+                    .shuffle = Shuffle.init(random),
                 };
             }
 
@@ -158,26 +162,13 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 return offset / slot_size;
             }
 
-            fn nextIndex(page: Page) ?usize {
-                if (page.isFull()) return null;
-                return page.nextIndexUnsafe();
-            }
-
-            fn nextIndexUnsafe(page: Page) usize {
-                var index = page.random.uintLessThan(usize, slot_count);
-
-                while (page.occupied.isSet(index)) {
-                    index = page.random.uintLessThan(usize, slot_count);
-                }
-
-                return index;
+            fn nextIndexUnsafe(page: *Page) usize {
+                return page.shuffle.pop();
             }
 
             fn allocSlot(page: *Page) ?*Slot {
-                if (page.nextIndex()) |index| {
-                    page.occupied.set(index);
-                    return page.slotPtr(index);
-                } else return null;
+                if (page.isFull()) return null;
+                return allocSlotUnsafe();
             }
 
             fn allocSlotUnsafe(page: *Page) *Slot {
@@ -188,6 +179,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
 
             inline fn freeIndex(page: *Page, index: usize) void {
                 page.occupied.unset(index);
+                page.shuffle.pushRaw(@intCast(ShuffleVector(slot_count).IndexType, index));
             }
 
             inline fn isFull(page: Page) bool {
