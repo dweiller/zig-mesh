@@ -5,6 +5,8 @@ const Allocator = std.mem.Allocator;
 
 const PoolAllocator = @import("pool_allocator.zig").PoolAllocator;
 
+const log = std.log.scoped(.MeshAllocator);
+
 pub const Config = struct {
     size_classes: []const usize = &.{
         16,
@@ -108,6 +110,7 @@ pub fn MeshAllocator(comptime config: Config) type {
                 if (len <= size and ptr_align <= size) {
                     const aligned_len = std.mem.alignAllocLen(size, len, len_align);
                     const pool = @ptrCast(*pool_type_map[index], &self.pools[index]);
+                    log.debug("creating allocation of size {d} in pool {d}", .{ len, pool.slot_size });
                     const slot = pool.allocSlot() orelse return error.OutOfMemory;
                     return std.mem.span(slot)[0..aligned_len];
                 }
@@ -128,6 +131,7 @@ pub fn MeshAllocator(comptime config: Config) type {
 
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
+                    log.debug("pool {d} owns the allocation to be resized", .{pool.slot_size});
                     return if (pool.slot_size < new_len)
                         null
                     else if (len_align == 0)
@@ -145,6 +149,7 @@ pub fn MeshAllocator(comptime config: Config) type {
 
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
+                    log.debug("pool {d} owns the pointer to be freed", .{pool.slot_size});
                     const slot = @ptrCast(*[pool.slot_size]u8, buf.ptr);
                     pool.freeSlot(slot);
                     return;
