@@ -27,6 +27,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
         full_pages: std.TailQueue(Page) = .{},
         rng: std.rand.DefaultPrng,
         node_allocator: Allocator,
+        comptime slot_size: usize = slot_size,
 
         pub const slot_count = page_size / slot_size;
         const BitSet = std.StaticBitSet(slot_count);
@@ -47,13 +48,13 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             }
         }
 
-        fn initPage(self: *Self) !*Page {
+        fn initPage(self: *Self) !*PageNode {
             const ptr = try getPage();
             errdefer releasePage(ptr);
             const page = try self.node_allocator.create(PageNode);
             page.* = .{ .data = Page.init(ptr, self.rng.random()) };
             self.pages.append(page);
-            return &page.data;
+            return page;
         }
 
         fn deinitPage(self: *Self, page: *PageNode) void {
@@ -65,26 +66,21 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             self.node_allocator.destroy(page);
         }
 
-        fn allocSlot(self: *Self) ?*Page.Slot {
-            var found_page: ?*Page = null;
-            var it = self.pages.first;
-            while (it) |node| : (it = node.next) {
-                if (!node.data.isFull()) {
-                    found_page = &node.data;
-                    break;
-                }
-            }
+        pub fn allocSlot(self: *Self) ?*Page.Slot {
+            const page_node = if (self.pages.first) |node|
+                node
+            else
+                self.initPage() catch return null;
 
-            var page: *Page = if (found_page) |page| page else self.initPage() catch return null;
-            const ptr = page.allocSlotUnsafe();
-            if (page.isFull()) {
-                self.pages.remove(it.?);
-                self.full_pages.prepend(it.?);
+            const ptr = page_node.data.allocSlotUnsafe();
+            if (page_node.data.isFull()) {
+                self.pages.remove(page_node);
+                self.full_pages.prepend(page_node);
             }
             return ptr;
         }
 
-        fn freeSlot(self: *Self, ptr: *Page.Slot) void {
+        pub fn freeSlot(self: *Self, ptr: *Page.Slot) void {
             inline for (.{ self.pages, self.full_pages }) |pages, i| {
                 var it = pages.first;
                 while (it) |node| : (it = node.next) {
@@ -132,6 +128,16 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 slots += node.data.occupied.count();
             }
             return self.full_pages.len * slot_count + slots;
+        }
+
+        pub fn ownsPtr(self: Self, ptr: *const anyopaque) bool {
+            inline for (.{ self.full_pages, self.pages }) |*pages| {
+                var it = pages.first;
+                while (it) |node| : (it = node.next) {
+                    if (node.data.ownsPtr(ptr)) return true;
+                }
+            }
+            return false;
         }
 
         const Page = struct {
@@ -190,7 +196,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 return page.occupied.count() == 0;
             }
 
-            inline fn ownsPtr(page: Page, ptr: *const Slot) bool {
+            inline fn ownsPtr(page: Page, ptr: *const anyopaque) bool {
                 return @ptrToInt(page.slots) == std.mem.alignBackward(@ptrToInt(ptr), page_size);
             }
         };
