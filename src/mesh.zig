@@ -103,14 +103,13 @@ pub fn MeshAllocator(comptime config: Config) type {
             ret_addr: usize,
         ) Allocator.Error![]u8 {
             // TODO: handle requested pointer and length alignment
-            std.debug.assert(ptr_align == 0);
-            std.debug.assert(len_align == 0);
-            std.debug.assert(ret_addr == 0);
+            _ = ret_addr;
             inline for (size_classes) |size, index| {
-                if (len <= size) {
+                if (len <= size and ptr_align <= size) {
+                    const aligned_len = std.mem.alignAllocLen(size, len, len_align);
                     const pool = @ptrCast(*pool_type_map[index], &self.pools[index]);
                     const slot = pool.allocSlot() orelse return error.OutOfMemory;
-                    return std.mem.span(slot);
+                    return std.mem.span(slot)[0..aligned_len];
                 }
             }
             return error.OutOfMemory;
@@ -124,8 +123,8 @@ pub fn MeshAllocator(comptime config: Config) type {
             len_align: u29,
             ret_addr: usize,
         ) ?usize {
-            std.debug.assert(buf_align == 0);
-            std.debug.assert(ret_addr == 0);
+            _ = buf_align;
+            _ = ret_addr;
 
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
@@ -141,8 +140,8 @@ pub fn MeshAllocator(comptime config: Config) type {
         }
 
         fn free(self: *Self, buf: []u8, buf_align: u29, ret_addr: usize) void {
-            std.debug.assert(buf_align == 0);
-            std.debug.assert(ret_addr == 0);
+            _ = buf_align;
+            _ = ret_addr;
 
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
@@ -157,9 +156,25 @@ pub fn MeshAllocator(comptime config: Config) type {
 }
 
 test {
-    var a = MeshAllocator(.{}).init(std.testing.allocator);
-    var buf = try a.alloc(8, 0, 0, 0);
-    try std.testing.expectEqual(@as(?usize, 16), a.resize(buf, 0, 16, 0, 0));
-    try std.testing.expectEqual(@as(?usize, null), a.resize(buf, 0, 17, 0, 0));
-    a.free(buf, 0, 0);
+    const config = Config{};
+    var mesher = MeshAllocator(config).init(std.testing.allocator);
+    const allocator = mesher.allocator();
+    for (config.size_classes) |size| {
+        {
+            var buf = try allocator.alloc(u8, size - 14);
+            std.testing.expect(allocator.resize(buf, size) != null) catch |err| {
+                std.debug.print("\nfailed to resize up for size class {d}\n", .{size});
+                return err;
+            };
+            std.testing.expect(allocator.resize(buf, size / 4) != null) catch |err| {
+                std.debug.print("\nfailed to resize down for size class {d}\n", .{size});
+                return err;
+            };
+            std.testing.expectEqual(@as(?[]u8, null), allocator.resize(buf, size + 1)) catch |err| {
+                std.debug.print("\nerroneously resized to size {d} for size class {d}\n", .{ size + 1, size });
+                return err;
+            };
+            allocator.free(buf);
+        }
+    }
 }
