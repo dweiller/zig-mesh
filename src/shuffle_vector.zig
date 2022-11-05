@@ -8,7 +8,7 @@ pub fn ShuffleVector(comptime max_size: comptime_int) type {
         random: std.rand.Random,
 
         pub const BitSet = std.StaticBitSet(max_size);
-        pub const IndexType = std.meta.Int(.unsigned, std.math.log2(max_size));
+        pub const IndexType = std.math.IntFittingRange(0, max_size);
 
         pub fn init(random: std.rand.Random) Self {
             var vec = Self{
