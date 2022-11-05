@@ -11,9 +11,9 @@ pub fn build(b: *std.build.Builder) void {
     const bench_step = b.step("bench", "Compile the benchmarks");
     bench_step.dependOn(&b.addInstallArtifact(bench).step);
 
-    const pool_tests = b.addTest("src/pool_allocator.zig");
-    pool_tests.setBuildMode(mode);
+    const lib_tests = b.addTest("src/test.zig");
+    lib_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&pool_tests.step);
+    test_step.dependOn(&lib_tests.step);
 }
