@@ -26,6 +26,8 @@ pub const Config = struct {
         448,
         512,
     },
+    // use enough pages for 64GiB by default
+    pool_page_count: usize = @divExact(64 * 1024 * 1024 * 1024, std.mem.page_size),
 };
 
 pub fn MeshAllocator(comptime config: Config) type {
@@ -75,10 +77,10 @@ pub fn MeshAllocator(comptime config: Config) type {
 
         pools: Pools,
 
-        pub fn init(node_allocator: Allocator) Self {
+        pub fn init(node_allocator: Allocator) !Self {
             var pools: Pools = undefined;
             inline for (pools) |*pool, i| {
-                pool.* = @TypeOf(pool.*).init(node_allocator, i);
+                pool.* = try @TypeOf(pool.*).init(node_allocator, i, config.pool_page_count);
             }
 
             return Self{
@@ -162,7 +164,7 @@ pub fn MeshAllocator(comptime config: Config) type {
 
 test {
     const config = Config{};
-    var mesher = MeshAllocator(config).init(std.testing.allocator);
+    var mesher = try MeshAllocator(config).init(std.testing.allocator);
     const allocator = mesher.allocator();
     for (config.size_classes) |size| {
         {
@@ -183,3 +185,11 @@ test {
         }
     }
 }
+
+// test "MeshAllocator: validate len_align" {
+//     var mesher = MeshAllocator(.{}).init(std.testing.allocator);
+//     var validator = std.mem.validationWrap(mesher);
+//     const allocator = validator.allocator();
+//     var slice = try allocator.alloc(u64, 3);
+//     allocator.free(slice);
+// }

@@ -14,7 +14,7 @@ pub fn main() !void {
     defer arena.deinit();
 
     const Pool = PoolAllocator(16);
-    var pool = Pool.init(arena.allocator(), 0);
+    var pool = try Pool.init(arena.allocator(), 0, 64);
     defer pool.deinit();
 
     pool_allocator.benchmarkPoolAllocatorAllocSlot(&pool, count);
