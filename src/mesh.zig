@@ -88,6 +88,12 @@ pub fn MeshAllocator(comptime config: Config) type {
             };
         }
 
+        pub fn deinit(self: *Self) void {
+            inline for (self.pools) |*pool| {
+                pool.deinit();
+            }
+        }
+
         fn poolIndexForSize(size: usize) ?usize {
             for (size_classes) |s, i| {
                 if (size <= s) return i;
@@ -113,7 +119,7 @@ pub fn MeshAllocator(comptime config: Config) type {
                     const aligned_len = std.mem.alignAllocLen(size, len, len_align);
                     const pool = @ptrCast(*pool_type_map[index], &self.pools[index]);
                     log.debug("creating allocation of size {d} in pool {d}", .{ len, pool.slot_size });
-                    const slot = pool.allocSlot() orelse return error.OutOfMemory;
+                    const slot = try pool.allocSlot();
                     return std.mem.span(slot)[0..aligned_len];
                 }
             }
@@ -165,6 +171,7 @@ pub fn MeshAllocator(comptime config: Config) type {
 test {
     const config = Config{};
     var mesher = try MeshAllocator(config).init(std.testing.allocator);
+    defer mesher.deinit();
     const allocator = mesher.allocator();
     for (config.size_classes) |size| {
         {
