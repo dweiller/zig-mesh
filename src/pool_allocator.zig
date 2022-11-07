@@ -42,11 +42,15 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 return self.list.len;
             }
 
-            inline fn get(self: PageList, index: usize) Page {
-                return self.list.at(index).*;
+            fn GetType(comptime SelfType: type) type {
+                if (@typeInfo(SelfType).Pointer.is_const) {
+                    return *const Page;
+                } else {
+                    return *Page;
+                }
             }
 
-            inline fn getPtr(self: *PageList, index: usize) *Page {
+            inline fn get(self: anytype, index: usize) GetType(@TypeOf(self)) {
                 return self.list.at(index);
             }
 
@@ -130,7 +134,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
         fn deinitPage(self: *Self, page: *Page) void {
             std.debug.assert(self.all_pages.len() > 0);
             const start_ptr = page.startPtr();
-            if (self.all_pages.getPtr(self.all_pages.len() - 1) == page) {
+            if (self.all_pages.get(self.all_pages.len() - 1) == page) {
                 _ = self.all_pages.pop();
             } else {
                 page.* = self.all_pages.pop();
@@ -138,7 +142,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             releasePage(start_ptr);
         }
 
-        inline fn page_offset(self: Self, page: Page) usize {
+        inline fn page_offset(self: Self, page: anytype) usize {
             const ptr = page.startPtr();
             return @ptrToInt(ptr) - @ptrToInt(self.start);
         }
@@ -164,7 +168,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 break :index self.growing_page.?;
             };
 
-            const page = self.all_pages.getPtr(page_index);
+            const page = self.all_pages.get(page_index);
 
             const ptr = page.allocSlotUnsafe();
             if (page.isFull()) {
@@ -193,15 +197,15 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             }
         }
 
-        fn canMesh(page1: Page, page2: Page) bool {
-            var meshed_bitset = page1.occupied;
-            meshed_bitset.setIntersection(page2.occupied);
+        fn canMesh(page1: BitSet, page2: BitSet) bool {
+            var meshed_bitset = page1;
+            meshed_bitset.setIntersection(page2);
             return meshed_bitset.count() == 0;
         }
 
         /// This function changes the Page pointed to by page2, by doing a swap removal on the PageList
-        fn meshPages(self: *Self, page1: Page, page2: *Page) void {
-            std.debug.assert(canMesh(page1, page2.*));
+        fn meshPages(self: *Self, page1: *const Page, page2: *Page) void {
+            std.debug.assert(canMesh(page1.occupied, page2.occupied));
             log.debug("meshPages: {*} and {*}\n", .{ page1.slots, page2.slots });
 
             // copy data from page2 to page1
@@ -213,7 +217,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
 
             var iter = slots_to_copy.iterator(.{});
             while (iter.next()) |slot_index| {
-                var dest = page1.slotPtr(slot_index);
+                const dest = page1.slotPtr(slot_index);
                 const src = page2.slotPtr(slot_index);
                 // std.debug.print("copying {d} into index {d}\n", .{ @bitCast(u128, src.*), slot_index });
                 std.mem.copy(u8, dest, src);
@@ -259,10 +263,10 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                     const page1_index = iter.index - 1;
                     const i = (page1_index + offset_to_random) % num_pages;
                     const page2_index = random_index[i];
-                    const page2 = self.all_pages.getPtr(page2_index);
-                    if (canMesh(page1.*, page2.*)) {
+                    const page2 = self.all_pages.get(page2_index);
+                    if (canMesh(page1.occupied, page2.occupied)) {
                         log.debug("Merging pages {d} and {d}\n", .{ page1_index, page2_index });
-                        self.meshPages(page1.*, page2);
+                        self.meshPages(page1, page2);
                         return;
                     }
                 }
@@ -465,15 +469,15 @@ test "mesh even and odd" {
     try std.testing.expectEqual(@as(u128, 257), @bitCast(u128, pointers[257].?.*));
 
     i = 0;
-    var page1 = pool.all_pages.getPtr(0);
-    var page2 = pool.all_pages.getPtr(1);
+    const page1 = pool.all_pages.get(0);
+    const page2 = pool.all_pages.get(1);
     while (i < page_size / 16) : (i += 2) {
         pool.freeSlot(page1.slotPtr(i + 1));
         pool.freeSlot(page2.slotPtr(i));
     }
     try std.testing.expectEqual(@as(usize, 2), pool.pageCount());
 
-    try std.testing.expect(Pool.canMesh(page1.*, page2.*));
+    try std.testing.expect(Pool.canMesh(page1.occupied, page2.occupied));
 
     try std.testing.expectEqual(@as(u128, 0), @bitCast(u128, pointers[0].?.*));
     try std.testing.expectEqual(@as(u128, 1), @bitCast(u128, pointers[1].?.*));
