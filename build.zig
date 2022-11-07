@@ -22,12 +22,28 @@ pub fn build(b: *std.build.Builder) void {
         }
     }
 
+    const standalone_test_step = b.step("standalone", "Build the standalone tests");
+
+    for (standalone_tests) |test_name| {
+        const test_exe = b.addExecutable(test_name, b.pathJoin(&.{ "test", test_name }));
+        test_exe.setBuildMode(mode);
+        test_exe.addPackagePath("mesh", "src/mesh.zig");
+        test_exe.override_dest_dir = .{ .custom = "test" };
+
+        const install_step = b.addInstallArtifact(test_exe);
+        standalone_test_step.dependOn(&install_step.step);
+    }
+
     const lib_tests = b.addTest("src/test.zig");
     lib_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&lib_tests.step);
 }
+
+const standalone_tests = [_][]const u8{
+    "create-destroy-loop.zig",
+};
 
 fn addBenchmark(
     b: *std.build.Builder,
