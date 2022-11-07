@@ -4,6 +4,11 @@ const MeshAllocator = @import("mesh.zig").MeshAllocator;
 
 const benchmark = @import("@benchmark");
 
+pub const Alloc = enum {
+    gpa,
+    mesh,
+};
+
 pub fn main() !void {
     var args = std.process.args();
     _ = args.next();
@@ -13,9 +18,13 @@ pub fn main() !void {
     }
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var mesher = try MeshAllocator(.{}).init(gpa.allocator());
-    const allocator = mesher.allocator();
-    try @field(benchmarks, benchmark.name)(allocator);
+    switch (comptime benchmark.allocator) {
+        .gpa => try @field(benchmarks, benchmark.name)(gpa.allocator()),
+        .mesh => {
+            var mesher = try MeshAllocator(.{}).init(gpa.allocator());
+            try @field(benchmarks, benchmark.name)(mesher.allocator());
+        },
+    }
 }
 
 const KiB = 1024;
