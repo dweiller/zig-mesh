@@ -186,7 +186,7 @@ pub fn MeshAllocator(comptime config: Config) type {
     };
 }
 
-test {
+test "each allocation type" {
     const config = Config{};
     var mesher = try MeshAllocator(config).init(std.testing.allocator);
     defer mesher.deinit();
@@ -232,6 +232,19 @@ test {
         return err;
     };
     allocator.free(buf);
+}
+
+test "create/destroy loop" {
+    const config = Config{};
+    var mesher = try MeshAllocator(config).init(std.testing.allocator);
+    defer mesher.deinit();
+    const allocator = mesher.allocator();
+
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        var ptr = try allocator.create(u32);
+        allocator.destroy(ptr);
+    }
 }
 
 // test "MeshAllocator: validate len_align" {

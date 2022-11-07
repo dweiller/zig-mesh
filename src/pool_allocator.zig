@@ -132,7 +132,18 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
 
         /// This function changes the Page pointed to by doing a swap removal on the PageList
         fn deinitPage(self: *Self, page: *Page) void {
+            log.debug("deiniting page {}", .{page.*});
             std.debug.assert(self.all_pages.len() > 0);
+
+            const change_growing = if (self.growing_page) |index| change_growing: {
+                const growing = self.all_pages.get(index);
+                if (growing == page) {
+                    log.debug("deinited page was the current growing page", .{});
+                    break :change_growing true;
+                }
+                break :change_growing false;
+            } else false;
+
             const start_ptr = page.startPtr();
             if (self.all_pages.get(self.all_pages.len() - 1) == page) {
                 _ = self.all_pages.pop();
@@ -140,6 +151,21 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 page.* = self.all_pages.pop();
             }
             releasePage(start_ptr);
+
+            if (change_growing) {
+                self.growing_page = self.findNonFullPageIndex();
+                log.debug("new growing page index: {?d}", .{self.growing_page});
+            }
+        }
+
+        fn findNonFullPageIndex(self: *Self) ?usize {
+            var iter = self.all_pages.list.constIterator(0);
+            while (iter.next()) |page| {
+                if (!page.isFull()) {
+                    return iter.index - 1;
+                }
+            }
+            return null;
         }
 
         inline fn page_offset(self: Self, page: anytype) usize {
@@ -148,6 +174,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
         }
 
         fn expand(self: *Self, page_count: usize) !void {
+            log.debug("expanding pool", .{});
             var i: usize = 0;
             while (i < page_count) : (i += 1) {
                 try self.initPage();
