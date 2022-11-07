@@ -36,19 +36,23 @@ const MiB = 1024 * KiB;
 const GiB = 1024 * MiB;
 pub const benchmarks = .{
     .many = .{
-        .@"16KiB" = benchmarkSize(@sizeOf(u32), 16 * KiB),
-        .@"32KiB" = benchmarkSize(@sizeOf(u32), 32 * KiB),
-        .@"64KiB" = benchmarkSize(@sizeOf(u32), 64 * KiB),
-        .@"128KiB" = benchmarkSize(@sizeOf(u32), 128 * KiB),
-        .@"256KiB" = benchmarkSize(@sizeOf(u32), 256 * KiB),
-        .@"512KiB" = benchmarkSize(@sizeOf(u32), 512 * KiB),
+        .@"u32-16KiB" = benchmarkSize(@sizeOf(u32), 16 * KiB),
+        .@"u32-32KiB" = benchmarkSize(@sizeOf(u32), 32 * KiB),
+        .@"u32-64KiB" = benchmarkSize(@sizeOf(u32), 64 * KiB),
+        .@"u32-128KiB" = benchmarkSize(@sizeOf(u32), 128 * KiB),
+        .@"u32-256KiB" = benchmarkSize(@sizeOf(u32), 256 * KiB),
+        .@"u32-512KiB" = benchmarkSize(@sizeOf(u32), 512 * KiB),
+    },
+    .@"many-transposed" = .{
+        .@"u32-16KiB" = benchmarkSizeTransposedDestroy(@sizeOf(u32), 16 * KiB),
+        .@"u32-32KiB" = benchmarkSizeTransposedDestroy(@sizeOf(u32), 32 * KiB),
+        .@"u32-64KiB" = benchmarkSizeTransposedDestroy(@sizeOf(u32), 64 * KiB),
+        .@"u32-128KiB" = benchmarkSizeTransposedDestroy(@sizeOf(u32), 128 * KiB),
+        .@"u32-256KiB" = benchmarkSizeTransposedDestroy(@sizeOf(u32), 256 * KiB),
+        .@"u32-512KiB" = benchmarkSizeTransposedDestroy(@sizeOf(u32), 512 * KiB),
     },
     .@"large-block" = .{
         .@"16KiB" = benchmarkLargeBlock(u8, 16 * KiB),
-        .@"32KiB" = benchmarkLargeBlock(u8, 32 * KiB),
-        .@"64KiB" = benchmarkLargeBlock(u8, 64 * KiB),
-        .@"128KiB" = benchmarkLargeBlock(u8, 128 * KiB),
-        .@"256KiB" = benchmarkLargeBlock(u8, 256 * KiB),
         .@"512KiB" = benchmarkLargeBlock(u8, 512 * KiB),
     },
 };
@@ -107,7 +111,7 @@ pub fn benchmarkSizeTransposedDestroy(comptime size: usize, comptime max_size: u
 pub fn benchmarkMultiSizeTransposedDestroy(
     comptime sizes: []const usize,
     comptime max_size: usize,
-) !Benchmark {
+) Benchmark {
     const sizes_sum = comptime sizes_sum: {
         var sum = 0;
         for (sizes) |size| {
