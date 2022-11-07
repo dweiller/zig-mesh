@@ -19,24 +19,38 @@ pub fn main() !void {
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     switch (comptime benchmark.allocator) {
-        .gpa => try @field(benchmarks, benchmark.name)(gpa.allocator()),
+        .gpa => try callBenchmark(benchmark.name, benchmark.subname, gpa.allocator()),
         .mesh => {
             var mesher = try MeshAllocator(.{}).init(gpa.allocator());
-            try @field(benchmarks, benchmark.name)(mesher.allocator());
+            try callBenchmark(benchmark.name, benchmark.subname, mesher.allocator());
         },
     }
+}
+
+fn callBenchmark(comptime field: []const u8, comptime sub_field: []const u8, allocator: Allocator) !void{
+    try @field(@field(benchmarks, field), sub_field)(allocator);
 }
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
 const GiB = 1024 * MiB;
 pub const benchmarks = .{
-    .@"many-u32-16KiB" = benchmarkSize(@sizeOf(u32), 16 * KiB),
-    .@"many-u32-32KiB" = benchmarkSize(@sizeOf(u32), 32 * KiB),
-    .@"many-u32-64KiB" = benchmarkSize(@sizeOf(u32), 64 * KiB),
-    .@"many-u32-128KiB" = benchmarkSize(@sizeOf(u32), 128 * KiB),
-    .@"many-u32-256KiB" = benchmarkSize(@sizeOf(u32), 256 * KiB),
-    .@"many-u32-512KiB" = benchmarkSize(@sizeOf(u32), 512 * KiB),
+    .many = .{
+        .@"16KiB" = benchmarkSize(@sizeOf(u32), 16 * KiB),
+        .@"32KiB" = benchmarkSize(@sizeOf(u32), 32 * KiB),
+        .@"64KiB" = benchmarkSize(@sizeOf(u32), 64 * KiB),
+        .@"128KiB" = benchmarkSize(@sizeOf(u32), 128 * KiB),
+        .@"256KiB" = benchmarkSize(@sizeOf(u32), 256 * KiB),
+        .@"512KiB" = benchmarkSize(@sizeOf(u32), 512 * KiB),
+    },
+    .@"large-block" = .{
+        .@"16KiB" = benchmarkLargeBlock(u8, 16 * KiB),
+        .@"32KiB" = benchmarkLargeBlock(u8, 32 * KiB),
+        .@"64KiB" = benchmarkLargeBlock(u8, 64 * KiB),
+        .@"128KiB" = benchmarkLargeBlock(u8, 128 * KiB),
+        .@"256KiB" = benchmarkLargeBlock(u8, 256 * KiB),
+        .@"512KiB" = benchmarkLargeBlock(u8, 512 * KiB),
+    },
 };
 
 pub const Benchmark = fn (Allocator) Allocator.Error!void;
