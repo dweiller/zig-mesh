@@ -76,6 +76,13 @@ pub fn MeshAllocator(comptime config: Config) type {
         const Self = @This();
 
         pools: Pools,
+        large_allocations: LargeAllocTable = .{},
+
+        const LargeAlloc = struct {
+            bytes: []u8,
+        };
+
+        const LargeAllocTable = std.AutoHashMapUnmanaged(usize, LargeAlloc);
 
         pub fn init(node_allocator: Allocator) !Self {
             var pools: Pools = undefined;
@@ -113,7 +120,6 @@ pub fn MeshAllocator(comptime config: Config) type {
             ret_addr: usize,
         ) Allocator.Error![]u8 {
             // TODO: handle requested pointer and length alignment
-            _ = ret_addr;
             inline for (size_classes) |size, index| {
                 if (len <= size and ptr_align <= size) {
                     const aligned_len = std.mem.alignAllocLen(size, len, len_align);
@@ -123,7 +129,11 @@ pub fn MeshAllocator(comptime config: Config) type {
                     return std.mem.span(slot)[0..aligned_len];
                 }
             }
-            return error.OutOfMemory;
+            try self.large_allocations.ensureUnusedCapacity(std.heap.page_allocator, 1);
+            const slice = try std.heap.page_allocator.rawAlloc(len, ptr_align, len_align, ret_addr);
+            log.debug("creating large allocation of size {d} at {*}", .{ len, slice.ptr });
+            self.large_allocations.putAssumeCapacity(@ptrToInt(slice.ptr), .{ .bytes = slice });
+            return slice;
         }
 
         fn resize(
@@ -134,9 +144,6 @@ pub fn MeshAllocator(comptime config: Config) type {
             len_align: u29,
             ret_addr: usize,
         ) ?usize {
-            _ = buf_align;
-            _ = ret_addr;
-
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
                     log.debug("pool {d} owns the allocation to be resized", .{pool.slot_size});
@@ -148,13 +155,21 @@ pub fn MeshAllocator(comptime config: Config) type {
                         pool.slot_size;
                 }
             }
-            unreachable;
+            // must be a large allocation
+            log.debug("resizing large allocation at {*}", .{buf.ptr});
+            const entry = self.large_allocations.getEntry(@ptrToInt(buf.ptr)) orelse unreachable;
+            const result_len = std.heap.page_allocator.rawResize(
+                buf,
+                buf_align,
+                new_len,
+                len_align,
+                ret_addr,
+            ) orelse return null;
+            entry.value_ptr.bytes = buf.ptr[0..result_len];
+            return result_len;
         }
 
         fn free(self: *Self, buf: []u8, buf_align: u29, ret_addr: usize) void {
-            _ = buf_align;
-            _ = ret_addr;
-
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
                     log.debug("pool {d} owns the pointer to be freed", .{pool.slot_size});
@@ -163,7 +178,10 @@ pub fn MeshAllocator(comptime config: Config) type {
                     return;
                 }
             }
-            unreachable;
+            // must be a large allocation
+            log.debug("freeing large allocation at {*}", .{buf.ptr});
+            std.heap.page_allocator.rawFree(buf, buf_align, ret_addr);
+            std.debug.assert(self.large_allocations.remove(@ptrToInt(buf.ptr)));
         }
     };
 }
@@ -180,10 +198,12 @@ test {
                 std.debug.print("\nfailed to resize up for size class {d}\n", .{size});
                 return err;
             };
+            buf.len = size;
             std.testing.expect(allocator.resize(buf, size / 4) != null) catch |err| {
                 std.debug.print("\nfailed to resize down for size class {d}\n", .{size});
                 return err;
             };
+            buf.len = size / 4;
             std.testing.expectEqual(@as(?[]u8, null), allocator.resize(buf, size + 1)) catch |err| {
                 std.debug.print("\nerroneously resized to size {d} for size class {d}\n", .{ size + 1, size });
                 return err;
@@ -191,6 +211,27 @@ test {
             allocator.free(buf);
         }
     }
+    // large allocation
+    const page_size = std.mem.page_size;
+    const inital_size = (3 * page_size) / 2;
+    const max_size = 2 * page_size;
+    const small_size = page_size / 2;
+    var buf = try allocator.alloc(u8, inital_size);
+    std.testing.expect(allocator.resize(buf, max_size) != null) catch |err| {
+        std.debug.print("\nfailed to resize large allocation up to {d}\n", .{max_size});
+        return err;
+    };
+    buf.len = max_size;
+    std.testing.expect(allocator.resize(buf, small_size) != null) catch |err| {
+        std.debug.print("\nfailed to resize large allocation down to {d}\n", .{small_size});
+        return err;
+    };
+    buf.len = small_size;
+    std.testing.expectEqual(@as(?[]u8, null), allocator.resize(buf, max_size + 1)) catch |err| {
+        std.debug.print("\nerroneously resized large allocation to size {d} (max should be {d})\n", .{ max_size + 1, max_size });
+        return err;
+    };
+    allocator.free(buf);
 }
 
 // test "MeshAllocator: validate len_align" {
