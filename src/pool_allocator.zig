@@ -62,21 +62,8 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 return self.list.pop().?;
             }
 
-            inline fn popOrNull(self: *PageList) ?Page {
-                return self.list.pop();
-            }
-
             inline fn deinit(self: *PageList, allocator: Allocator) void {
                 self.list.deinit(allocator);
-            }
-
-            fn indexOf(self: PageList, ptr: *const Page) usize {
-                const list_addr = @ptrToInt(self.list.items.ptr);
-                const elem_addr = @ptrToInt(ptr);
-                std.debug.assert(list_addr < elem_addr);
-                const offset = elem_addr - list_addr;
-                std.debug.assert(offset % @sizeOf(Page) == 0);
-                return offset / @sizeOf(Page);
             }
         };
 
