@@ -5,7 +5,6 @@ const Allocator = std.mem.Allocator;
 
 const ShuffleVector = @import("shuffle_vector.zig").ShuffleVector;
 
-const page_allocator = std.heap.page_allocator;
 const page_size = std.mem.page_size;
 
 const PagePtr = [*]align(page_size) u8;
@@ -39,15 +38,10 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
         const BitSet = std.StaticBitSet(slots_per_page);
 
         const PageList = struct {
-            headers: [*]PageHeader,
+            headers: [*]align(page_size) PageHeader,
             current: ?usize = null,
             len: usize = 0,
             capacity: usize,
-
-            fn deinit(self: *PageList) void {
-                std.heap.page_allocator.free(self.headers[0..self.capacity]);
-                self.* = undefined;
-            }
 
             fn get(self: PageList, index: usize) PageHeader {
                 return self.headers[index];
@@ -120,7 +114,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
 
             const header_bytes = try std.os.mmap(
                 null,
-                header_page_count * page_size,
+                data_page_count * @sizeOf(PageHeader),
                 MMAP_PROT_FLAGS,
                 std.os.MAP.PRIVATE | std.os.MAP.ANONYMOUS,
                 -1,
@@ -154,8 +148,10 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             for (self.all_pages.slice()) |*page| {
                 releasePage(page.pagePtr());
             }
-            self.all_pages.deinit();
+            const size = self.all_pages.capacity * @sizeOf(PageHeader);
+            std.os.munmap(@ptrCast([*]u8, self.all_pages.headers)[0..size]);
             std.os.close(self.fd);
+            self.* = undefined;
         }
 
         fn initPage(self: *Self) !void {
