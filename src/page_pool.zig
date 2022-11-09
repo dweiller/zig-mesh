@@ -9,9 +9,9 @@ const page_size = std.mem.page_size;
 
 const PagePtr = [*]align(page_size) u8;
 
-const log = std.log.scoped(.PoolAllocator);
+const log = std.log.scoped(.MeshingPool);
 
-pub fn PoolAllocator(comptime slot_size: comptime_int) type {
+pub fn MeshingPool(comptime slot_size: comptime_int) type {
     comptime {
         if (slot_size > page_size)
             @compileError(std.fmt.comptimePrint(
@@ -389,11 +389,11 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
     };
 }
 
-test "PoolAllocator" {
-    var pool = try PoolAllocator(16).init(0, 3);
+test "MeshingPool" {
+    var pool = try MeshingPool(16).init(0, 3);
     defer pool.deinit();
 
-    try std.testing.expectEqual(256, PoolAllocator(16).slots_per_page);
+    try std.testing.expectEqual(256, MeshingPool(16).slots_per_page);
 
     const p1 = try pool.allocSlot();
     try std.testing.expectEqual(@as(usize, 1), pool.pageCount());
@@ -415,8 +415,8 @@ test "PoolAllocator" {
     try std.testing.expectEqual(@as(usize, 0), pool.usedSlots());
 }
 
-test "PoolAllocator page reclamation" {
-    var pool = try PoolAllocator(16).init(0, 4);
+test "MeshingPool page reclamation" {
+    var pool = try MeshingPool(16).init(0, 4);
     defer pool.deinit();
 
     var i: usize = 0;
@@ -432,7 +432,7 @@ test "PoolAllocator page reclamation" {
 }
 
 fn report(
-    pool: PoolAllocator(16),
+    pool: MeshingPool(16),
     pointers: []?*[16]u8,
     comptime which: enum { before_alloc, after_alloc, after_write },
     i: usize,
@@ -460,7 +460,7 @@ fn report(
 }
 
 test "mesh even and odd" {
-    const Pool = PoolAllocator(16);
+    const Pool = MeshingPool(16);
     var pool = try Pool.init(0, 3);
     defer pool.deinit();
 
@@ -553,7 +553,7 @@ fn waitForInput() void {
 }
 
 // fills a single page, then deinits it `count` times
-pub fn benchmarkPoolAllocatorAllocSlot(pool: anytype, count: usize) !void {
+pub fn benchmarkMeshingPoolAllocSlot(pool: anytype, count: usize) !void {
     var j: usize = 0;
     while (j < count) : (j += 1) {
         var i: usize = 0;

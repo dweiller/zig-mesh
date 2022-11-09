@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const PoolAllocator = @import("pool_allocator.zig").PoolAllocator;
+const MeshingPool = @import("page_pool.zig").MeshingPool;
 
 const log = std.log.scoped(.MeshAllocator);
 
@@ -43,7 +43,7 @@ pub fn MeshAllocator(comptime config: Config) type {
     const pool_type_map = map: {
         var map: [size_classes.len]type = undefined;
         for (map) |*t, i| {
-            const T = PoolAllocator(size_classes[i]);
+            const T = MeshingPool(size_classes[i]);
             t.* = T;
             max_size = @max(max_size, @sizeOf(T));
         }
@@ -53,7 +53,7 @@ pub fn MeshAllocator(comptime config: Config) type {
     const Pools = Pools: {
         var fields: [size_classes.len]std.builtin.Type.StructField = undefined;
         for (fields) |*field, i| {
-            const T = PoolAllocator(size_classes[i]);
+            const T = MeshingPool(size_classes[i]);
             field.* = .{
                 .name = std.fmt.comptimePrint("{d}", .{i}),
                 .field_type = T,
