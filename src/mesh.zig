@@ -126,7 +126,6 @@ pub fn MeshAllocator(comptime config: Config) type {
                     const pool = @ptrCast(*pool_type_map[index], &self.pools[index]);
                     const slot = try pool.allocSlot();
                     log.debug("allocation of size {d} in pool {d} created at {*}", .{ len, pool.slot_size, slot });
-                    std.debug.assert(pool.ownsPtr(slot));
                     return std.mem.span(slot)[0..aligned_len];
                 }
             }

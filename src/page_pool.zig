@@ -315,11 +315,10 @@ pub fn MeshingPool(comptime slot_size: comptime_int) type {
 
         pub fn ownsPtr(self: Self, ptr: *const anyopaque) bool {
             log.debug("ownsPtr({*})", .{ptr});
-            for (self.all_pages.slice()) |page| {
-                if (page.ownsPtr(ptr)) return true;
-                log.debug("\tfalse: {}", .{page});
-            }
-            return false;
+            const start = @ptrToInt(self.start);
+            const end = @ptrToInt(self.end);
+            const addr = @ptrToInt(ptr);
+            return start <= addr and addr < end;
         }
 
         const PageHeader = struct {
@@ -346,7 +345,6 @@ pub fn MeshingPool(comptime slot_size: comptime_int) type {
             }
 
             fn slotIndex(page: PageHeader, ptr: *Slot) usize {
-                std.debug.assert(page.ownsPtr(ptr));
                 const offset = @ptrToInt(ptr) - @ptrToInt(page.slots);
                 return offset / slot_size;
             }
@@ -365,7 +363,6 @@ pub fn MeshingPool(comptime slot_size: comptime_int) type {
                 page.occupied.set(index);
                 const ptr = page.slotPtr(index);
                 log.debug("pool allocated slot {d} at {*}", .{ index, ptr });
-                std.debug.assert(page.ownsPtr(ptr));
                 return ptr;
             }
 
