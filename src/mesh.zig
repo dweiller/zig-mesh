@@ -84,10 +84,10 @@ pub fn MeshAllocator(comptime config: Config) type {
 
         const LargeAllocTable = std.AutoHashMapUnmanaged(usize, LargeAlloc);
 
-        pub fn init(node_allocator: Allocator) !Self {
+        pub fn init() !Self {
             var pools: Pools = undefined;
             inline for (pools) |*pool, i| {
-                pool.* = try @TypeOf(pool.*).init(node_allocator, i, config.pool_page_count);
+                pool.* = try @TypeOf(pool.*).init(i, config.pool_page_count);
             }
 
             return Self{
@@ -124,8 +124,9 @@ pub fn MeshAllocator(comptime config: Config) type {
                 if (len <= size and ptr_align <= size) {
                     const aligned_len = std.mem.alignAllocLen(size, len, len_align);
                     const pool = @ptrCast(*pool_type_map[index], &self.pools[index]);
-                    log.debug("creating allocation of size {d} in pool {d}", .{ len, pool.slot_size });
                     const slot = try pool.allocSlot();
+                    log.debug("allocation of size {d} in pool {d} created at {*}", .{ len, pool.slot_size, slot });
+                    std.debug.assert(pool.ownsPtr(slot));
                     return std.mem.span(slot)[0..aligned_len];
                 }
             }
@@ -188,7 +189,7 @@ pub fn MeshAllocator(comptime config: Config) type {
 
 test "each allocation type" {
     const config = Config{};
-    var mesher = try MeshAllocator(config).init(std.testing.allocator);
+    var mesher = try MeshAllocator(config).init();
     defer mesher.deinit();
     const allocator = mesher.allocator();
     for (config.size_classes) |size| {
@@ -236,12 +237,13 @@ test "each allocation type" {
 
 test "create/destroy loop" {
     const config = Config{};
-    var mesher = try MeshAllocator(config).init(std.testing.allocator);
+    var mesher = try MeshAllocator(config).init();
     defer mesher.deinit();
     const allocator = mesher.allocator();
 
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
+        log.debug("iteration {d}", .{i});
         var ptr = try allocator.create(u32);
         allocator.destroy(ptr);
     }

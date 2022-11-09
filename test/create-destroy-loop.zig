@@ -4,7 +4,7 @@ const MeshAlllocator = @import("mesh").MeshAllocator;
 pub fn main() !void {
     var meta_alloc = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = meta_alloc.deinit();
-    var mesher = try MeshAlllocator(.{}).init(meta_alloc.allocator());
+    var mesher = try MeshAlllocator(.{}).init();
     defer mesher.deinit();
 
     const allocator = mesher.allocator();

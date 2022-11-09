@@ -21,7 +21,7 @@ pub fn main() !void {
     switch (comptime benchmark.allocator) {
         .gpa => try callBenchmark(benchmark.name, benchmark.subname, gpa.allocator()),
         .mesh => {
-            var mesher = try MeshAllocator(.{}).init(gpa.allocator());
+            var mesher = try MeshAllocator(.{}).init();
             try callBenchmark(benchmark.name, benchmark.subname, mesher.allocator());
         },
     }
