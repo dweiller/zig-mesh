@@ -27,7 +27,7 @@ pub fn main() !void {
     }
 }
 
-fn callBenchmark(comptime field: []const u8, comptime sub_field: []const u8, allocator: Allocator) !void{
+fn callBenchmark(comptime field: []const u8, comptime sub_field: []const u8, allocator: Allocator) !void {
     try @field(@field(benchmarks, field), sub_field)(allocator);
 }
 
