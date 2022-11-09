@@ -44,21 +44,13 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             len: usize = 0,
             capacity: usize,
 
-            fn init() !PageList {
-                const headers = try std.heap.page_allocator.alloc(PageHeader, headers_per_page);
-                return PageList{
-                    .headers = headers.ptr,
-                    .capacity = headers_per_page,
-                };
-            }
-
             fn deinit(self: *PageList) void {
                 std.heap.page_allocator.free(self.headers[0..self.capacity]);
                 self.* = undefined;
             }
 
             fn get(self: PageList, index: usize) PageHeader {
-                    return self.headers[index];
+                return self.headers[index];
             }
 
             fn getPtr(self: PageList, index: usize) *PageHeader {
@@ -108,7 +100,6 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 }
                 return null;
             }
-
         };
 
         const MMAP_PROT_FLAGS = std.os.PROT.READ | std.os.PROT.WRITE;
@@ -118,7 +109,26 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             const fd = try std.os.memfd_create(std.fmt.comptimePrint("pool{d}", .{slot_size}), 0);
             errdefer std.os.close(fd);
 
-            const size = @min(max_page_count, headers_per_page) * page_size;
+            const data_page_count = max_page_count * headers_per_page / (headers_per_page + 1);
+            const header_page_count = (data_page_count + headers_per_page - 1) / headers_per_page;
+
+            log.debug("creating pool with max_page_count = {d}; data_page_count = {d}; header_page_count = {d}", .{
+                max_page_count,
+                data_page_count,
+                header_page_count,
+            });
+
+            const header_bytes = try std.os.mmap(
+                null,
+                header_page_count * page_size,
+                MMAP_PROT_FLAGS,
+                std.os.MAP.PRIVATE | std.os.MAP.ANONYMOUS,
+                -1,
+                0,
+            );
+            errdefer std.os.munmap(header_bytes);
+
+            const size = data_page_count * page_size;
             try std.os.ftruncate(fd, size);
 
             const start = try std.os.mmap(
@@ -131,7 +141,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             );
 
             return .{
-                .all_pages = try PageList.init(),
+                .all_pages = .{ .headers = @ptrCast([*]PageHeader, header_bytes.ptr), .capacity = data_page_count },
                 .rng = std.rand.DefaultPrng.init(seed),
                 // TODO: FD_CLOEXEC for multithreading
                 .fd = fd,
@@ -269,7 +279,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             const rand_len = buf.len / @sizeOf(HeaderIndex);
             std.debug.assert(rand_len >= 2 * num_pages);
             var rand_index1 = rand_idx[0..num_pages];
-            var rand_index2 = rand_idx[num_pages..2 * num_pages];
+            var rand_index2 = rand_idx[num_pages .. 2 * num_pages];
             for (rand_index1[0..num_pages]) |*r, i| {
                 r.* = @intCast(HeaderIndex, i);
             }
@@ -283,7 +293,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
             var offset_to_random: usize = 0;
             while (offset_to_random < max_offset) : (offset_to_random += 1) {
                 for (rand_index1[0..num_pages]) |page1_index, i| {
-                    const page2_index = rand_index2[(i +  offset_to_random) % num_pages];
+                    const page2_index = rand_index2[(i + offset_to_random) % num_pages];
                     const page1 = self.all_pages.get(page1_index);
                     const page2 = self.all_pages.get(page2_index);
                     if (canMesh(page1.occupied, page2.occupied)) {
@@ -358,7 +368,7 @@ pub fn PoolAllocator(comptime slot_size: comptime_int) type {
                 const index = page.nextIndexUnsafe();
                 page.occupied.set(index);
                 const ptr = page.slotPtr(index);
-                log.debug("pool allocated slot {d} at {*}", .{index, ptr});
+                log.debug("pool allocated slot {d} at {*}", .{ index, ptr });
                 std.debug.assert(page.ownsPtr(ptr));
                 return ptr;
             }
@@ -410,7 +420,7 @@ test "PoolAllocator" {
 }
 
 test "PoolAllocator page reclamation" {
-    var pool = try PoolAllocator(16).init(0, 3);
+    var pool = try PoolAllocator(16).init(0, 4);
     defer pool.deinit();
 
     var i: usize = 0;
@@ -455,7 +465,7 @@ fn report(
 
 test "mesh even and odd" {
     const Pool = PoolAllocator(16);
-    var pool = try Pool.init(0, 2);
+    var pool = try Pool.init(0, 3);
     defer pool.deinit();
 
     var pointers: [2 * page_size / 16]?*[16]u8 = .{null} ** (2 * page_size / 16);
