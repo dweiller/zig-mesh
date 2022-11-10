@@ -1,5 +1,3 @@
-// TODO: first make a mesh allocator for a fixed slot size, i.e. a pool/object allocator that does meshing
-//       Then reuse that code to make a GPA that has mesh allocators for different sizes
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
