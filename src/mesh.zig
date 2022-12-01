@@ -109,67 +109,89 @@ pub fn MeshAllocator(comptime config: Config) type {
         }
 
         pub fn allocator(self: *Self) Allocator {
-            return Allocator.init(self, alloc, resize, free);
+            return .{
+                .ptr = self,
+                .vtable = &.{
+                    .alloc = alloc,
+                    .resize = resize,
+                    .free = free,
+                },
+            };
+        }
+
+        inline fn maxOffset(size: usize, alignment: usize) usize {
+            const gcd = std.math.gcd(size, alignment);
+            return alignment - gcd;
         }
 
         fn alloc(
-            self: *Self,
+            ctx: *anyopaque,
             len: usize,
-            ptr_align: u29,
-            len_align: u29,
+            log2_ptr_align: u8,
             ret_addr: usize,
-        ) Allocator.Error![]u8 {
+        ) ?[*]u8 {
+            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
             // TODO: handle requested pointer and length alignment
+            const alignment = @as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align);
             inline for (size_classes) |size, index| {
-                if (len <= size and ptr_align <= size) {
-                    const aligned_len = std.mem.alignAllocLen(size, len, len_align);
-                    const pool = @ptrCast(*pool_type_map[index], &self.pools[index]);
-                    const slot = try pool.allocSlot();
-                    log.debug("allocation of size {d} in pool {d} created at {*}", .{ len, pool.slot_size, slot });
-                    return std.mem.span(slot)[0..aligned_len];
+                if (len <= size and alignment <= size) {
+                    const max_offset = maxOffset(size, alignment);
+                    if (max_offset + len <= size) {
+                        const pool = @ptrCast(*pool_type_map[index], &self.pools[index]);
+                        const slot = pool.allocSlot() catch return null;
+                        log.debug("allocation of size {d} in pool {d} created in slot at {*}", .{ len, pool.slot_size, slot });
+                        return std.mem.alignPointer(@as([*]u8, slot), alignment) orelse unreachable;
+                    }
                 }
             }
-            try self.large_allocations.ensureUnusedCapacity(std.heap.page_allocator, 1);
-            const slice = try std.heap.page_allocator.rawAlloc(len, ptr_align, len_align, ret_addr);
-            log.debug("creating large allocation of size {d} at {*}", .{ len, slice.ptr });
-            self.large_allocations.putAssumeCapacity(@ptrToInt(slice.ptr), .{ .bytes = slice });
-            return slice;
+
+            self.large_allocations.ensureUnusedCapacity(std.heap.page_allocator, 1) catch return null;
+            if (std.heap.page_allocator.rawAlloc(len, log2_ptr_align, ret_addr)) |ptr| {
+                log.debug("creating large allocation of size {d} at {*}", .{ len, ptr });
+                self.large_allocations.putAssumeCapacity(@ptrToInt(ptr), .{ .bytes = ptr[0..len] });
+                return ptr;
+            } else {
+                return null;
+            }
         }
 
         fn resize(
-            self: *Self,
+            ctx: *anyopaque,
             buf: []u8,
-            buf_align: u29,
+            log2_buf_align: u8,
             new_len: usize,
-            len_align: u29,
             ret_addr: usize,
-        ) ?usize {
+        ) bool {
+            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
                     log.debug("pool {d} owns the allocation to be resized", .{pool.slot_size});
-                    return if (pool.slot_size < new_len)
-                        null
-                    else if (len_align == 0)
-                        new_len
+                    const page_offset = @ptrToInt(buf.ptr) % std.mem.page_size;
+                    const slot_index = page_offset / pool.slot_size;
+                    const new_end_index = (page_offset + new_len - 1) / pool.slot_size;
+
+                    return if (new_end_index != slot_index)
+                        false
                     else
-                        pool.slot_size;
+                        true;
                 }
             }
             // must be a large allocation
             log.debug("resizing large allocation at {*}", .{buf.ptr});
             const entry = self.large_allocations.getEntry(@ptrToInt(buf.ptr)) orelse unreachable;
-            const result_len = std.heap.page_allocator.rawResize(
+            if (std.heap.page_allocator.rawResize(
                 buf,
-                buf_align,
+                log2_buf_align,
                 new_len,
-                len_align,
                 ret_addr,
-            ) orelse return null;
-            entry.value_ptr.bytes = buf.ptr[0..result_len];
-            return result_len;
+            )) {
+                entry.value_ptr.bytes = buf.ptr[0..new_len];
+                return true;
+            } else return false;
         }
 
-        fn free(self: *Self, buf: []u8, buf_align: u29, ret_addr: usize) void {
+        fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+            const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ctx));
             inline for (self.pools) |*pool| {
                 if (pool.ownsPtr(buf.ptr)) {
                     log.debug("pool {d} owns the pointer to be freed", .{pool.slot_size});
@@ -180,7 +202,7 @@ pub fn MeshAllocator(comptime config: Config) type {
             }
             // must be a large allocation
             log.debug("freeing large allocation at {*}", .{buf.ptr});
-            std.heap.page_allocator.rawFree(buf, buf_align, ret_addr);
+            std.heap.page_allocator.rawFree(buf, log2_buf_align, ret_addr);
             std.debug.assert(self.large_allocations.remove(@ptrToInt(buf.ptr)));
         }
     };
@@ -194,17 +216,17 @@ test "each allocation type" {
     for (config.size_classes) |size| {
         {
             var buf = try allocator.alloc(u8, size - 14);
-            std.testing.expect(allocator.resize(buf, size) != null) catch |err| {
+            std.testing.expect(allocator.resize(buf, size)) catch |err| {
                 std.debug.print("\nfailed to resize up for size class {d}\n", .{size});
                 return err;
             };
             buf.len = size;
-            std.testing.expect(allocator.resize(buf, size / 4) != null) catch |err| {
+            std.testing.expect(allocator.resize(buf, size / 4)) catch |err| {
                 std.debug.print("\nfailed to resize down for size class {d}\n", .{size});
                 return err;
             };
             buf.len = size / 4;
-            std.testing.expectEqual(@as(?[]u8, null), allocator.resize(buf, size + 1)) catch |err| {
+            std.testing.expect(!allocator.resize(buf, size + 1)) catch |err| {
                 std.debug.print("\nerroneously resized to size {d} for size class {d}\n", .{ size + 1, size });
                 return err;
             };
@@ -217,17 +239,17 @@ test "each allocation type" {
     const max_size = 2 * page_size;
     const small_size = page_size / 2;
     var buf = try allocator.alloc(u8, inital_size);
-    std.testing.expect(allocator.resize(buf, max_size) != null) catch |err| {
+    std.testing.expect(allocator.resize(buf, max_size)) catch |err| {
         std.debug.print("\nfailed to resize large allocation up to {d}\n", .{max_size});
         return err;
     };
     buf.len = max_size;
-    std.testing.expect(allocator.resize(buf, small_size) != null) catch |err| {
+    std.testing.expect(allocator.resize(buf, small_size)) catch |err| {
         std.debug.print("\nfailed to resize large allocation down to {d}\n", .{small_size});
         return err;
     };
     buf.len = small_size;
-    std.testing.expectEqual(@as(?[]u8, null), allocator.resize(buf, max_size + 1)) catch |err| {
+    std.testing.expect(!allocator.resize(buf, max_size + 1)) catch |err| {
         std.debug.print("\nerroneously resized large allocation to size {d} (max should be {d})\n", .{ max_size + 1, max_size });
         return err;
     };
