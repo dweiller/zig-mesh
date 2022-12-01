@@ -101,7 +101,9 @@ pub fn MeshingPool(comptime slot_size: comptime_int) type {
             const fd = try std.os.memfd_create(std.fmt.comptimePrint("pool{d}", .{slot_size}), 0);
             errdefer std.os.close(fd);
 
-            const data_page_count = max_page_count * headers_per_page / (headers_per_page + 1);
+            // data_page_count = header_page_count * headers_per_page
+            //                 = (max_page_count - data_page_count) * headers_per_page
+            const data_page_count = (max_page_count * headers_per_page) / (headers_per_page + 1);
             const header_page_count = (data_page_count + headers_per_page - 1) / headers_per_page;
 
             log.debug("creating pool with max_page_count = {d}; data_page_count = {d}; header_page_count = {d}", .{
