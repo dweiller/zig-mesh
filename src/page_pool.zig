@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const ShuffleVector = @import("shuffle_vector.zig").ShuffleVector;
+const ShuffleVector = @import("shuffle_vector.zig").StaticShuffleVector;
 
 const page_size = std.mem.page_size;
 
@@ -374,7 +374,7 @@ pub fn MeshingPool(comptime slot_size: comptime_int) type {
 
             inline fn freeIndex(page: *PageHeader, index: usize) void {
                 page.occupied.unset(index);
-                page.shuffle.pushRaw(@intCast(ShuffleVector(slots_per_page).IndexType, index));
+                page.shuffle.pushAssumeCapacity(@intCast(Shuffle.IndexType, index));
             }
 
             inline fn isFull(page: PageHeader) bool {
