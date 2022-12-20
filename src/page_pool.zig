@@ -224,9 +224,15 @@ pub fn MeshingPool(comptime slot_size: comptime_int) type {
         }
 
         fn canMesh(page1: BitSet, page2: BitSet) bool {
-            var meshed_bitset = page1;
-            meshed_bitset.setIntersection(page2);
-            return meshed_bitset.count() == 0;
+            if (comptime slots_per_page <= 64) {
+                return page1.mask & page2.mask == 0;
+            } else {
+                for (page1.masks) |mask, i| {
+                    if (mask & page2.masks[i] != 0)
+                        return false;
+                }
+                return true;
+            }
         }
 
         /// This function changes the Page pointed to by page2, by doing a swap removal on the PageList
