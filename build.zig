@@ -24,10 +24,16 @@ pub fn build(b: *std.build.Builder) void {
 
     const standalone_test_step = b.step("standalone", "Build the standalone tests");
 
+    const standalone_options = b.addOptions();
+    const standalone_pauses = b.option(bool, "pauses", "Insert pauses into standalone tests (default: false)") orelse false;
+    standalone_options.addOption(bool, "pauses", standalone_pauses);
+
     for (standalone_tests) |test_name| {
-        const test_exe = b.addExecutable(test_name, b.pathJoin(&.{ "test", test_name }));
+        const exe_name = test_name[0..test_name.len - 4];
+        const test_exe = b.addExecutable(exe_name, b.pathJoin(&.{ "test", test_name }));
         test_exe.setBuildMode(mode);
         test_exe.addPackagePath("mesh", "src/mesh.zig");
+        test_exe.addPackage(standalone_options.getPackage("build_options"));
         test_exe.override_dest_dir = .{ .custom = "test" };
 
         const install_step = b.addInstallArtifact(test_exe);

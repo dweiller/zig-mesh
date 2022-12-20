@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const MeshAlllocator = @import("mesh").MeshAllocator;
 
 pub fn main() !void {
@@ -18,15 +19,18 @@ pub fn main() !void {
             ptr.* = b;
         }
 
-        std.debug.print("memory allocated\n", .{});
-        std.time.sleep(3 * std.time.ns_per_s);
-        std.debug.print("freeing memory\n", .{});
+        if (comptime build_options.pauses) {
+            std.debug.print("memory allocated\n", .{});
+            std.time.sleep(3 * std.time.ns_per_s);
+            std.debug.print("freeing memory\n", .{});
+        }
 
         for (buf) |ptr| {
             allocator.destroy(ptr);
         }
-        std.debug.print("memory freed\n", .{});
-        std.time.sleep(3 * std.time.ns_per_s);
+        if (comptime build_options.pauses) {
+            std.debug.print("memory freed\n", .{});
+            std.time.sleep(3 * std.time.ns_per_s);
+        }
     }
-    std.debug.print("bye\n", .{});
 }
