@@ -10,7 +10,75 @@ pub fn ShuffleVector(comptime T: type) type {
     return ShuffleVectorGeneric(T, null);
 }
 
+pub fn StaticShuffleVectorUnmanaged(comptime max_size: comptime_int) type {
+    const IndexType = std.math.IntFittingRange(0, max_size);
+    return ShuffleVectorUnmanagedGeneric(IndexType, max_size);
+}
+
+pub fn ShuffleVectorUnmanaged(comptime T: type) type {
+    return ShuffleVectorUnmanagedGeneric(T, null);
+}
+
 pub fn ShuffleVectorGeneric(comptime T: type, comptime static: ?comptime_int) type {
+    return struct {
+        random: Random,
+        unmanaged: Unmanaged,
+
+        const Self = @This();
+        const Unmanaged = ShuffleVectorUnmanagedGeneric(T, static);
+        pub const IndexType = Unmanaged.IndexType;
+
+        pub usingnamespace if (static) |_|
+            struct {
+                pub fn init(random: Random) Self {
+                    return Self{
+                        .random = random,
+                        .unmanaged = Unmanaged.init(random),
+                    };
+                }
+            }
+        else
+            struct {
+                pub fn init(random: Random, buffer: []IndexType) Self {
+                    return Self{
+                        .random = random,
+                        .unmanaged = Unmanaged.init(random, buffer),
+                    };
+                }
+            };
+
+        pub fn push(self: *Self, index: IndexType) !void {
+            return self.unmanaged.push(self.random, index);
+        }
+
+        pub fn pushAssumeCapacity(self: *Self, index: IndexType) void {
+            return self.unmanaged.pushAssumeCapacity(self.random, index);
+        }
+
+        pub fn pushSwap(self: *Self) void {
+            return self.unmanaged.pushSwap(self.random);
+        }
+
+        pub fn popOrNull(self: *Self) ?IndexType {
+            return self.unmanaged.popOrNull();
+        }
+
+        pub fn pop(self: *Self) IndexType {
+            return self.unmanaged.pop();
+        }
+
+        pub fn peek(self: Self) ?T {
+            return self.unmanaged.peek();
+        }
+
+        pub fn count(self: Self) usize {
+            return self.unmanaged.count();
+        }
+
+    };
+}
+
+pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptime_int) type {
     comptime {
         if (@typeInfo(T) != .Int and @typeInfo(T).Int.signedness != .unsigned) {
             @compileError("T must be an unsigned integer, got " ++ @typeName(T));
@@ -20,7 +88,6 @@ pub fn ShuffleVectorGeneric(comptime T: type, comptime static: ?comptime_int) ty
         const Self = @This();
 
         indices: Buffer,
-        random: Random,
 
         const Buffer = if (static) |max_size| std.BoundedArray(IndexType, max_size) else FixedBuffer(IndexType);
 
@@ -31,7 +98,6 @@ pub fn ShuffleVectorGeneric(comptime T: type, comptime static: ?comptime_int) ty
                 pub fn init(random: Random) Self {
                     var self = Self{
                         .indices = Buffer{ .len = static.? },
-                        .random = random,
                     };
                     var buf = self.indices.slice();
                     for (buf) |*index, i| {
@@ -52,24 +118,23 @@ pub fn ShuffleVectorGeneric(comptime T: type, comptime static: ?comptime_int) ty
 
                     return Self{
                         .indices = FixedBuffer(IndexType).initLen(buffer, buffer.len),
-                        .random = random,
                     };
                 }
             };
 
-        pub fn push(self: *Self, index: IndexType) !void {
+        pub fn push(self: *Self, random: Random, index: IndexType) !void {
             try self.indices.append(index);
-            self.pushSwap();
+            self.pushSwap(random);
         }
 
-        pub fn pushAssumeCapacity(self: *Self, index: IndexType) void {
+        pub fn pushAssumeCapacity(self: *Self, random: Random, index: IndexType) void {
             self.indices.appendAssumeCapacity(index);
-            self.pushSwap();
+            self.pushSwap(random);
         }
 
-        pub fn pushSwap(self: *Self) void {
+        pub fn pushSwap(self: *Self, random: Random) void {
             const len = self.indices.buffer.len;
-            const swap_offset = self.random.uintLessThan(usize, len);
+            const swap_offset = random.uintLessThan(usize, len);
             std.mem.swap(IndexType, &self.indices.buffer[swap_offset], &self.indices.buffer[len - 1]);
         }
 
@@ -79,6 +144,15 @@ pub fn ShuffleVectorGeneric(comptime T: type, comptime static: ?comptime_int) ty
 
         pub inline fn pop(self: *Self) IndexType {
             return self.indices.pop();
+        }
+
+        pub fn peek(self: Self) ?T {
+            if (self.indices.buffer.len == 0) return null;
+            return self.indices.buffer[self.indices.buffer.len - 1];
+        }
+
+        pub inline fn count(self: Self) usize {
+            return self.indices.buffer.len;
         }
     };
 }
