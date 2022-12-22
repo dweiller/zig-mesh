@@ -76,26 +76,26 @@ fn canMesh(self: MeshingPool, page1_index: usize, page2_index: usize) bool {
     return true;
 }
 
-/// This function changes the Page pointed to by page2, by doing a swap removal on the PageList
+/// This function changes the page pointed to by page2 to be page1
 fn meshPages(
     self: MeshingPool,
     page1_index: usize,
     page2_index: usize,
 ) void {
-    // assert(canMesh(page1_bitset, page2_bitset));
+    assert(self.canMesh(page1_index, page2_index));
+
     const page1 = self.slab.dataPage(page1_index);
     const page2 = self.slab.dataPage(page2_index);
     log.debug("meshPages: {*} and {*}\n", .{ page1, page2 });
 
+    const page1_bitset = self.slab.bitset(page1_index);
     const page2_bitset = self.slab.bitset(page2_index);
 
-    // TODO: it would be better to intersect the complement of page1_bitset
-    // with page2_bitset and iterate over that. The issue with this is that
-    // this would require copying the bitset.
     var iter = page2_bitset.iterator(.{});
     while (iter.next()) |slot_index| {
         const dest = self.slab.slot(page1_index, slot_index);
         const src = self.slab.slot(page2_index, slot_index);
+        page1_bitset.set(slot_index);
         std.mem.copy(u8, dest, src);
     }
 
@@ -152,18 +152,7 @@ fn meshAll(self: *MeshingPool, buf: []u8) void {
 }
 
 fn usedSlots(self: MeshingPool) usize {
-    var count: usize = if (self.slab.current_index) |index| self.slab.bitset(index).count() else 0;
-    var num_partial: usize = if (self.slab.current_index != null) 1 else 0;
-    var iter = self.slab.partial_pages.first;
-    while (iter) |node| : (iter = node.next) {
-        num_partial += 1;
-        const bs = self.slab.bitset(self.slab.indexOf(node).page);
-        count += bs.count();
-    }
-    const slots_per_page = page_size / self.slot_size;
-    const num_empty = self.slab.empty_pages.len();
-    const num_full = self.slab.page_mark - num_empty - num_partial;
-    return num_full * slots_per_page + count;
+    return self.slab.usedSlots();
 }
 
 fn nonEmptyPages(self: MeshingPool) usize {
@@ -214,7 +203,7 @@ test "mesh even and odd" {
     var pool = try MeshingPool.init(16);
     defer pool.deinit();
 
-    var pointers: [2 * page_size / 16]?*[16]u8 = .{null} ** (2 * page_size / 16);
+    var pointers: [2 * page_size / 16]?*u128 = .{null} ** (2 * page_size / 16);
     var i: usize = 0;
     while (i < 2 * page_size / 16) : (i += 1) {
         report(pool, &pointers, .before_alloc, i);
@@ -224,80 +213,69 @@ test "mesh even and odd" {
         const index = pool.slab.indexOf(bytes.ptr).slot;
         const pointer_index = if (second_page) @as(usize, index) + 256 else index;
         assert(pointers[pointer_index] == null);
-        pointers[pointer_index] = @ptrCast(*[16]u8, bytes.ptr);
+        pointers[pointer_index] = @ptrCast(*u128, @alignCast(16, bytes.ptr));
 
         report(pool, &pointers, .after_alloc, i);
 
-        pointers[pointer_index].?.* = @bitCast([16]u8, @as(u128, pointer_index));
+        pointers[pointer_index].?.* = @as(u128, pointer_index);
 
         report(pool, &pointers, .after_write, i);
     }
 
     log.debug("after writes: first page {d}; second page {d}; pointer[0] ({*}) {d}; pointer[256] ({*}) {d}\n", .{
-        @bitCast(u128, @ptrCast(*[16]u8, pool.slab.slot(0, 0).ptr).*),
-        @bitCast(u128, @ptrCast(*[16]u8, pool.slab.slot(1, 0).ptr).*),
+        @ptrCast(*u128, @alignCast(16, pool.slab.slot(0, 0).ptr)).*,
+        @ptrCast(*u128, @alignCast(16, pool.slab.slot(1, 0).ptr)).*,
         pointers[0],
-        @bitCast(u128, pointers[0].?.*),
+        pointers[0].?.*,
         pointers[256],
-        @bitCast(u128, pointers[256].?.*),
+        pointers[256].?.*,
     });
 
     try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPages());
 
-    try std.testing.expectEqual(@as(u128, 0), @bitCast(u128, pointers[0].?.*));
-    try std.testing.expectEqual(@as(u128, 1), @bitCast(u128, pointers[1].?.*));
-    try std.testing.expectEqual(@as(u128, 256), @bitCast(u128, pointers[256].?.*));
-    try std.testing.expectEqual(@as(u128, 257), @bitCast(u128, pointers[257].?.*));
+    try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
+    try std.testing.expectEqual(@as(u128, 1), pointers[1].?.*);
+    try std.testing.expectEqual(@as(u128, 256), pointers[256].?.*);
+    try std.testing.expectEqual(@as(u128, 257), pointers[257].?.*);
 
     i = 0;
-    const page1_index = pool.slab.indexOf(pool.slab.dataPage(0)).page;
-    const page2_index = pool.slab.indexOf(pool.slab.dataPage(1)).page;
     while (i < page_size / 16) : (i += 2) {
-        pool.freeSlot(pool.slab.slot(page1_index, i + 1).ptr);
-        pool.freeSlot(pool.slab.slot(page2_index, i).ptr);
+        pool.freeSlot(pool.slab.slot(0, i + 1).ptr);
+        pool.freeSlot(pool.slab.slot(1, i).ptr);
     }
     try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPages());
     try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
 
-    try std.testing.expect(pool.canMesh(page1_index, page2_index));
+    try std.testing.expect(pool.canMesh(0, 1));
 
-    try std.testing.expectEqual(@as(u128, 0), @bitCast(u128, pointers[0].?.*));
-    // try std.testing.expectEqual(@as(u128, 1), @bitCast(u128, pointers[1].?.*));
-    try std.testing.expectEqual(@as(u128, 2), @bitCast(u128, pointers[2].?.*));
-    // try std.testing.expectEqual(@as(u128, 3), @bitCast(u128, pointers[3].?.*));
-    try std.testing.expectEqual(@as(u128, 4), @bitCast(u128, pointers[4].?.*));
-    // try std.testing.expectEqual(@as(u128, 5), @bitCast(u128, pointers[5].?.*));
+    try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
+    try std.testing.expectEqual(@as(u128, 2), pointers[2].?.*);
+    try std.testing.expectEqual(@as(u128, 4), pointers[4].?.*);
 
-    // try std.testing.expectEqual(@as(u128, 256), @bitCast(u128, pointers[256].?.*));
-    try std.testing.expectEqual(@as(u128, 257), @bitCast(u128, pointers[257].?.*));
-    // try std.testing.expectEqual(@as(u128, 258), @bitCast(u128, pointers[258].?.*));
-    try std.testing.expectEqual(@as(u128, 259), @bitCast(u128, pointers[259].?.*));
-    // try std.testing.expectEqual(@as(u128, 260), @bitCast(u128, pointers[260].?.*));
-    try std.testing.expectEqual(@as(u128, 261), @bitCast(u128, pointers[261].?.*));
+    try std.testing.expectEqual(@as(u128, 257), pointers[257].?.*);
+    try std.testing.expectEqual(@as(u128, 259), pointers[259].?.*);
+    try std.testing.expectEqual(@as(u128, 261), pointers[261].?.*);
 
     // waitForInput();
     var buf: [16]u8 = undefined;
     pool.meshAll(&buf);
     // waitForInput();
 
-    try std.testing.expectEqual(@as(u128, 0), @bitCast(u128, pointers[0].?.*));
-    try std.testing.expectEqual(@as(u128, 257), @bitCast(u128, pointers[1].?.*));
-    try std.testing.expectEqual(@as(u128, 2), @bitCast(u128, pointers[2].?.*));
-    try std.testing.expectEqual(@as(u128, 259), @bitCast(u128, pointers[3].?.*));
-    try std.testing.expectEqual(@as(u128, 4), @bitCast(u128, pointers[4].?.*));
-    try std.testing.expectEqual(@as(u128, 261), @bitCast(u128, pointers[5].?.*));
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
 
-    try std.testing.expectEqual(@as(u128, 0), @bitCast(u128, pointers[256].?.*));
-    try std.testing.expectEqual(@as(u128, 257), @bitCast(u128, pointers[257].?.*));
-    try std.testing.expectEqual(@as(u128, 2), @bitCast(u128, pointers[258].?.*));
-    try std.testing.expectEqual(@as(u128, 259), @bitCast(u128, pointers[259].?.*));
-    try std.testing.expectEqual(@as(u128, 4), @bitCast(u128, pointers[260].?.*));
-    try std.testing.expectEqual(@as(u128, 261), @bitCast(u128, pointers[261].?.*));
+    i = 0;
+    while (i < page_size / 16) : (i += 2) {
+        try std.testing.expectEqual(@as(u128, i), pointers[i].?.*);
+        try std.testing.expectEqual(@as(u128, i), pointers[i + 256].?.*);
+        try std.testing.expectEqual(@as(u128, i + 1 + 256), pointers[i + 1].?.*);
+        try std.testing.expectEqual(@as(u128, i + 1 + 256), pointers[i + 1 + 256].?.*);
+    }
 }
 
 fn report(
     pool: MeshingPool,
-    pointers: []?*[16]u8,
+    pointers: []?*u128,
     comptime which: enum { before_alloc, after_alloc, after_write },
     i: usize,
 ) void {
@@ -308,16 +286,14 @@ fn report(
             .after_alloc => "after allocating index {d}\n",
             .after_write => "after writing index {d}\n",
         }, .{i});
-        if (pool.slab.current_index) |page_index| {
-            inline for (.{ 0, 1, 2 }) |index| {
-                if (pointers[index]) |ptr| {
-                    log.debug("\tindex {d} (on page {d}) has value {d} (by pointer {d})\n", .{
-                        index,
-                        page_index,
-                        @bitCast(u128, @ptrCast(*[16]u8, pool.slab.slot(page_index, index).ptr).*),
-                        @bitCast(u128, ptr.*),
-                    });
-                }
+        inline for (.{ 0, 1, 2 }) |index| {
+            if (pointers[index]) |ptr| {
+                log.debug("\tindex {d} (on page {d}) has value {d} (by pointer {d})\n", .{
+                    index,
+                    0,
+                    @ptrCast(*u128, @alignCast(16, pool.slab.slot(0, index).ptr)).*,
+                    ptr.*,
+                });
             }
         }
     }

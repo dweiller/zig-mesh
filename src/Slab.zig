@@ -308,6 +308,22 @@ pub fn indexOf(self: *const Slab, ptr: *anyopaque) Index {
     };
 }
 
+pub fn usedSlots(self: *const Slab) usize {
+    var count: usize = if (self.current_index) |index| self.bitset(index).count() else 0;
+    var num_partial: usize = if (self.current_index) |_| 1 else 0;
+    var iter = self.partial_pages.first;
+    while (iter) |node| : (iter = node.next) {
+        num_partial += 1;
+        const bs = self.bitset(self.indexOf(node).page);
+        count += bs.count();
+    }
+
+    const slots_per_page = page_size / self.slot_size;
+    const num_empty = self.empty_pages.len();
+    const num_full = self.page_mark - num_empty - num_partial;
+    return num_full * slots_per_page + count;
+}
+
 test {
     var rng = std.rand.DefaultPrng.init(0);
     var pool = try Slab.init(rng.random(), 16, 16);
