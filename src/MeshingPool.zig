@@ -20,6 +20,8 @@ const page_size = std.mem.page_size;
 
 const log = std.log.scoped(.MeshingPool);
 
+const assert = @import("mesh.zig").assert;
+
 const MeshingPool = @This();
 
 // TODO: use multiple slabs
@@ -53,7 +55,7 @@ pub fn allocSlot(self: *MeshingPool) ?[]u8 {
 }
 
 pub fn freeSlot(self: *MeshingPool, ptr: *anyopaque) void {
-    std.debug.assert(self.ownsPtr(ptr));
+    assert(self.ownsPtr(ptr));
     const slab = self.slab;
     slab.freeSlot(self.rng.random(), slab.indexOf(ptr));
 }
@@ -80,7 +82,7 @@ fn meshPages(
     page1_index: usize,
     page2_index: usize,
 ) void {
-    // std.debug.assert(canMesh(page1_bitset, page2_bitset));
+    // assert(canMesh(page1_bitset, page2_bitset));
     const page1 = self.slab.dataPage(page1_index);
     const page2 = self.slab.dataPage(page2_index);
     log.debug("meshPages: {*} and {*}\n", .{ page1, page2 });
@@ -117,14 +119,14 @@ fn meshAll(self: *MeshingPool, buf: []u8) void {
     if (slab.partial_pages.first == null or (slab.partial_pages.first.?.next == null and slab.current_index == null)) return;
 
     const num_pages = slab.partial_pages.len() + if (slab.current_index != null) @as(usize, 1) else 0;
-    std.debug.assert(num_pages > 1);
+    assert(num_pages > 1);
 
-    std.debug.assert(num_pages <= std.math.maxInt(Slab.SlotIndex));
+    assert(num_pages <= std.math.maxInt(Slab.SlotIndex));
     // TODO: cache this in Self so we don't need to do it all the time
     const random = self.rng.random();
     const rand_idx = @ptrCast([*]Slab.SlotIndex, buf.ptr);
     const rand_len = buf.len / @sizeOf(Slab.SlotIndex);
-    std.debug.assert(rand_len >= 2 * num_pages);
+    assert(rand_len >= 2 * num_pages);
     var rand_index1 = rand_idx[0..num_pages];
     var rand_index2 = rand_idx[num_pages .. 2 * num_pages];
     for (rand_index1[0..num_pages]) |*r, i| {
@@ -222,7 +224,7 @@ test "mesh even and odd" {
         const second_page = i > 255;
         const index = pool.slab.indexOf(bytes.ptr).slot;
         const pointer_index = if (second_page) @as(usize, index) + 256 else index;
-        std.debug.assert(pointers[pointer_index] == null);
+        assert(pointers[pointer_index] == null);
         pointers[pointer_index] = @ptrCast(*[16]u8, bytes.ptr);
 
         report(pool, &pointers, .after_alloc, i);

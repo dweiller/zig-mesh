@@ -14,6 +14,8 @@ const log = std.log.scoped(.Core);
 
 const page_size = std.mem.page_size;
 
+const assert = @import("mesh.zig").assert;
+
 const Span = @This();
 
 page_count: u16, // would allow for up to page_size * (2 ^ 16 - 1) total bytes (4KiB under 256MiB for 4KiB pages)
@@ -22,7 +24,7 @@ fd: std.os.fd_t, // a valid file descriptor is required for remapping addresses
 
 /// Initialise a new span. `page_count` must be at most 16.
 pub fn init(alignment: usize, page_count: usize) !Span {
-    std.debug.assert(alignment >= page_count * page_size);
+    assert(alignment >= page_count * page_size);
     const size = page_count * page_size;
     const oversized = size + alignment - 1;
 

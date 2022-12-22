@@ -7,6 +7,8 @@ const MeshingPool = @import("MeshingPool.zig");
 
 const log = std.log.scoped(.MeshAllocator);
 
+pub const assert = std.debug.assert;
+
 pub const Config = struct {
     size_classes: []const usize = &.{
         16,
@@ -46,8 +48,8 @@ const LargeAlloc = struct {
 const LargeAllocTable = std.AutoHashMapUnmanaged(usize, LargeAlloc);
 
 pub fn init(config: Config) !MeshAllocator {
-    std.debug.assert(std.sort.isSorted(usize, config.size_classes, {}, std.sort.asc(usize)));
-    std.debug.assert(config.size_classes.len < max_num_size_classes);
+    assert(std.sort.isSorted(usize, config.size_classes, {}, std.sort.asc(usize)));
+    assert(config.size_classes.len < max_num_size_classes);
 
     var size_classes: [max_num_size_classes]u16 = undefined;
     for (config.size_classes) |size, i| {
@@ -159,7 +161,7 @@ fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
     // must be a large allocation
     log.debug("freeing large allocation at {*}", .{buf.ptr});
     std.heap.page_allocator.rawFree(buf, log2_buf_align, ret_addr);
-    std.debug.assert(self.large_allocations.remove(@ptrToInt(buf.ptr)));
+    assert(self.large_allocations.remove(@ptrToInt(buf.ptr)));
 }
 
 test "each allocation type" {

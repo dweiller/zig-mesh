@@ -1,6 +1,8 @@
 const std = @import("std");
 const Random = std.rand.Random;
 
+const assert = @import("mesh.zig").assert;
+
 pub fn StaticShuffleVector(comptime max_size: comptime_int) type {
     const IndexType = std.math.IntFittingRange(0, max_size);
     return ShuffleVectorGeneric(IndexType, max_size);
@@ -110,7 +112,7 @@ pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptim
         else
             struct {
                 pub fn init(random: Random, buffer: []IndexType) Self {
-                    std.debug.assert(buffer.len - 1 <= std.math.maxInt(IndexType));
+                    assert(buffer.len - 1 <= std.math.maxInt(IndexType));
                     for (buffer) |*index, i| {
                         index.* = @intCast(IndexType, i);
                     }
@@ -185,7 +187,7 @@ pub fn FixedBuffer(comptime T: type) type {
         }
 
         pub fn appendAssumeCapacity(self: *Self, item: T) void {
-            std.debug.assert(self.buffer.len < self.capacity);
+            assert(self.buffer.len < self.capacity);
             self.buffer.len += 1;
             self.buffer[self.buffer.len - 1] = item;
         }

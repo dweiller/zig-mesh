@@ -38,6 +38,8 @@ pub const PageIndex = u16;
 pub const SlotIndex = std.math.IntFittingRange(0, params.max_slot_count - 1);
 const ShuffleVector = @import("shuffle_vector.zig").ShuffleVectorUnmanaged(SlotIndex);
 
+const assert = @import("mesh.zig").assert;
+
 /// `Slab` cannot be copied (and so should be passed by pointer), as this would detach the metadata from allocations
 const Slab = @This();
 
@@ -55,7 +57,7 @@ current_index: ?PageIndex,
 // though indexOf should reduce cache pollution, as it only loads from the Slab header
 const PageList = std.SinglyLinkedList(void);
 comptime {
-    std.debug.assert(@sizeOf(PageList.Node) <= params.slot_size_min);
+    assert(@sizeOf(PageList.Node) <= params.slot_size_min);
 }
 
 const bitset_offset = std.mem.alignForward(@sizeOf(Slab), @alignOf(BitSet));
@@ -107,7 +109,7 @@ pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !*align
     while (data_pages + meta_pages > max_pages) : (data_pages -= 1) {
         meta_pages = metadataPageCount(slots_per_page, data_pages);
     }
-    std.debug.assert(meta_pages <= std.math.maxInt(u16));
+    assert(meta_pages <= std.math.maxInt(u16));
     const page_count = data_pages + meta_pages;
     // const data_pages = (min_slots + slots_per_page - 1) / slots_per_page;
     // const metadata_pages = metadataPageCount(slots_per_page, data_pages);
@@ -197,14 +199,14 @@ pub fn allocSlot(self: *Slab) ?[]u8 {
     const page_shuffle = self.shuffle(page_index);
     const page_bitset = self.bitset(page_index);
 
-    std.debug.assert(page_shuffle.count() > 0);
+    assert(page_shuffle.count() > 0);
 
     if (page_shuffle.count() == 1) {
         self.current_index = if (self.partial_pages.popFirst()) |node| self.indexOf(node).page else null;
     }
 
     const slot_index = page_shuffle.pop();
-    std.debug.assert(!page_bitset.isSet(slot_index));
+    assert(!page_bitset.isSet(slot_index));
 
     page_bitset.set(slot_index);
 
@@ -294,7 +296,7 @@ pub fn slot(self: *const Slab, page_index: usize, slot_index: usize) []u8 {
 
 const Index = struct { page: PageIndex, slot: SlotIndex };
 pub fn indexOf(self: *const Slab, ptr: *anyopaque) Index {
-    std.debug.assert(self.ownsPtr(ptr));
+    assert(self.ownsPtr(ptr));
     const addr = @ptrToInt(ptr);
     const offset = addr - @ptrToInt(self);
     const page_index = offset / page_size - self.data_start;
