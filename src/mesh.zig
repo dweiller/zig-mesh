@@ -28,8 +28,6 @@ pub const Config = struct {
         448,
         512,
     },
-    // use enough pages for 64GiB by default
-    pool_page_count: usize = @divExact(64 * 1024 * 1024 * 1024, std.mem.page_size),
 };
 
 const max_num_size_classes = 32;
