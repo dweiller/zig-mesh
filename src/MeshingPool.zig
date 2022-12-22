@@ -112,9 +112,14 @@ pub fn ownsPtr(self: MeshingPool, ptr: *anyopaque) bool {
     return false;
 }
 
-fn canMesh(self: MeshingPool, page1_index: usize, page2_index: usize) bool {
-    const page1_bitset = self.slab.bitset(page1_index);
-    const page2_bitset = self.slab.bitset(page2_index);
+const SlabPage = struct {
+    slab: Slab.Ptr,
+    page: Slab.PageIndex,
+};
+
+fn canMesh(slab_page1: SlabPage, slab_page2: SlabPage) bool {
+    const page1_bitset = slab_page1.slab.bitset(slab_page1.page);
+    const page2_bitset = slab_page2.slab.bitset(slab_page2.page);
     const bitsize = @bitSizeOf(std.DynamicBitSet.MaskInt);
     const num_masks = (page1_bitset.bit_length + (bitsize - 1)) / bitsize;
     for (page1_bitset.masks[0..num_masks]) |mask, i| {
@@ -125,31 +130,33 @@ fn canMesh(self: MeshingPool, page1_index: usize, page2_index: usize) bool {
 }
 
 /// This function changes the page pointed to by page2 to be page1
-fn meshPages(
-    self: MeshingPool,
-    page1_index: usize,
-    page2_index: usize,
-) void {
-    assert(self.canMesh(page1_index, page2_index));
+fn meshPages(slab_page1: SlabPage, slab_page2: SlabPage) void {
+    assert(canMesh(slab_page1, slab_page2));
 
-    const page1 = self.slab.dataPage(page1_index);
-    const page2 = self.slab.dataPage(page2_index);
+    const slab1 = slab_page1.slab;
+    const slab2 = slab_page2.slab;
+
+    const page1_index = slab_page1.page;
+    const page2_index = slab_page2.page;
+
+    const page1 = slab1.dataPage(page1_index);
+    const page2 = slab2.dataPage(page2_index);
     log.debug("meshPages: {*} and {*}\n", .{ page1, page2 });
 
-    const page1_bitset = self.slab.bitset(page1_index);
-    const page2_bitset = self.slab.bitset(page2_index);
+    const page1_bitset = slab1.bitset(page1_index);
+    const page2_bitset = slab2.bitset(page2_index);
 
     var iter = page2_bitset.iterator(.{});
     while (iter.next()) |slot_index| {
-        const dest = self.slab.slot(page1_index, slot_index);
-        const src = self.slab.slot(page2_index, slot_index);
+        const dest = slab1.slot(page1_index, slot_index);
+        const src = slab2.slot(page2_index, slot_index);
         page1_bitset.set(slot_index);
         std.mem.copy(u8, dest, src);
     }
 
-    self.slab.freePage(page2_index);
+    slab2.freePage(page2_index);
 
-    const page_offset = @ptrToInt(page1) - @ptrToInt(self.slab);
+    const page_offset = @ptrToInt(page1) - @ptrToInt(slab1);
 
     log.debug("remaping {*} to {*}\n", .{ page2, page1 });
     _ = std.os.mmap(
@@ -157,14 +164,12 @@ fn meshPages(
         page_size,
         std.os.PROT.READ | std.os.PROT.WRITE,
         std.os.MAP.FIXED | std.os.MAP.SHARED,
-        self.slab.fd,
+        slab1.fd,
         page_offset,
     ) catch @panic("failed to mesh pages");
 }
 
-fn meshAll(self: *MeshingPool, buf: []u8) void {
-    const slab = self.slab;
-
+fn meshAll(self: *MeshingPool, slab: Slab.Ptr, buf: []u8) void {
     const num_pages = slab.partial_pages.len() + if (slab.current_index != null) @as(usize, 1) else 0;
     if (num_pages <= 1) return;
 
@@ -190,9 +195,11 @@ fn meshAll(self: *MeshingPool, buf: []u8) void {
     while (offset_to_random < max_offset) : (offset_to_random += 1) {
         for (rand_index1[0..num_pages]) |page1_index, i| {
             const page2_index = rand_index2[(i + offset_to_random) % num_pages];
-            if (self.canMesh(page1_index, page2_index)) {
+            const handle1 = SlabPage{ .slab = slab, .page = page1_index };
+            const handle2 = SlabPage{ .slab = slab, .page = page2_index };
+            if (canMesh(handle1, handle2)) {
                 log.debug("Merging pages {d} and {d}\n", .{ page1_index, page2_index });
-                self.meshPages(page1_index, page2_index);
+                meshPages(handle1, handle2);
                 return;
             }
         }
@@ -294,7 +301,7 @@ test "mesh even and odd" {
     try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPages());
     try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
 
-    try std.testing.expect(pool.canMesh(0, 1));
+    try std.testing.expect(canMesh(.{ .slab = pool.slab, .page = 0 }, .{ .slab = pool.slab, .page = 1 }));
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 2), pointers[2].?.*);
@@ -306,7 +313,7 @@ test "mesh even and odd" {
 
     // waitForInput();
     var buf: [16]u8 = undefined;
-    pool.meshAll(&buf);
+    pool.meshAll(pool.slab, &buf);
     // waitForInput();
 
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
