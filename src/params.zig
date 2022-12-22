@@ -10,8 +10,10 @@ const page_size = std.mem.page_size;
 // bitsets/shuffle vectors).
 pub const slot_size_max = page_size / 2;
 pub const slot_size_min = 16;
-pub const max_slot_count = page_size / slot_size_min;
+pub const slots_per_page_max = page_size / slot_size_min;
 pub const slab_alignment = 1 << 16; // 64KiB
+pub const slab_size_max = slab_alignment;
+pub const page_count_max = slab_size_max / page_size;
 
 comptime {
     assert(slot_size_max <= std.math.maxInt(u16));
@@ -23,6 +25,6 @@ pub fn assertSlotSizeValid(slot_size: usize) void {
     assert(slot_size % slot_size_min == 0);
 }
 
-pub fn assertMaxPagesValid(max_pages: usize) void {
-    assert(max_pages <= slab_alignment / page_size);
+pub fn assertPageCountValid(page_count: usize) void {
+    assert(page_count <= page_count_max);
 }

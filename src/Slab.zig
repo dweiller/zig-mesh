@@ -35,7 +35,7 @@ const PagePtr = [*]align(page_size) u8;
 
 const page_size = std.mem.page_size;
 pub const PageIndex = u16;
-pub const SlotIndex = std.math.IntFittingRange(0, params.max_slot_count - 1);
+pub const SlotIndex = std.math.IntFittingRange(0, params.slots_per_page_max - 1);
 const ShuffleVector = @import("shuffle_vector.zig").ShuffleVectorUnmanaged(SlotIndex);
 
 const assert = @import("mesh.zig").assert;
@@ -102,19 +102,19 @@ fn metadataPageCount(slots_per_page: usize, data_page_count: usize) usize {
     return std.mem.alignForward(one_past_metadata_end, page_size) / page_size;
 }
 
-pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !Ptr {
+pub fn init(random: std.rand.Random, slot_size: usize, page_count_max: usize) !Ptr {
     params.assertSlotSizeValid(slot_size);
-    params.assertMaxPagesValid(max_pages);
+    params.assertPageCountValid(page_count_max);
 
     const slots_per_page = page_size / slot_size;
 
-    var data_pages: usize = max_pages;
-    var meta_pages: usize = 1;
-    while (data_pages + meta_pages > max_pages) : (data_pages -= 1) {
-        meta_pages = metadataPageCount(slots_per_page, data_pages);
+    var num_data_pages: usize = page_count_max;
+    var num_meta_pages: usize = 1;
+    while (num_data_pages + num_meta_pages > page_count_max) : (num_data_pages -= 1) {
+        num_meta_pages = metadataPageCount(slots_per_page, num_data_pages);
     }
-    assert(meta_pages <= std.math.maxInt(u16));
-    const page_count = data_pages + meta_pages;
+    assert(num_meta_pages <= std.math.maxInt(u16));
+    const page_count = num_data_pages + num_meta_pages;
     // const data_pages = (min_slots + slots_per_page - 1) / slots_per_page;
     // const metadata_pages = metadataPageCount(slots_per_page, data_pages);
     // const page_count = data_pages + metadata_pages;
@@ -126,7 +126,7 @@ pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !Ptr {
         .slot_size = @intCast(u16, slot_size),
         .page_mark = 0,
         .page_count = span.page_count,
-        .data_start = @intCast(u16, meta_pages),
+        .data_start = @intCast(u16, num_meta_pages),
         .fd = span.fd,
         .partial_pages = .{},
         .empty_pages = .{},
@@ -136,43 +136,45 @@ pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !Ptr {
     };
 
     // TODO: consider lazy initialisation (i.e. an initPage(index) function that sets up a bitset/shuffle pair)
-    initBitSets(slab, slots_per_page, data_pages);
-    initShuffles(slab, random, slots_per_page, data_pages);
+    initBitSets(slab, slots_per_page, num_data_pages);
+    initShuffles(slab, random, slots_per_page, num_data_pages);
     return slab;
 }
 
-fn initBitSets(pool: Ptr, slots_per_page: usize, data_pages: usize) void {
+fn initBitSets(pool: Ptr, slots_per_page: usize, num_data_pages: usize) void {
     const base_addr = @ptrToInt(pool);
     const bitset_ptr = @intToPtr([*]BitSet, base_addr + bitset_offset);
 
     // use a FixedBufferAllocator that allocates from the memory immediately following the pool struct
-    const bitset_data_ptr = @intToPtr([*]BitSet.MaskInt, base_addr + bitsetDataOffset(data_pages));
+    const bitset_data_ptr = @intToPtr([*]BitSet.MaskInt, base_addr + bitsetDataOffset(num_data_pages));
     // add one for mask len (see implementation of DynamicBitSet)
     const bitset_masks_per_page = (slots_per_page + @bitSizeOf(BitSet.MaskInt) - 1) / @bitSizeOf(BitSet.MaskInt) + 1;
-    const bitset_buf_len = (bitset_masks_per_page * data_pages);
+    const bitset_buf_len = (bitset_masks_per_page * num_data_pages);
     const bitset_data_buf = std.mem.sliceAsBytes(bitset_data_ptr[0..bitset_buf_len]);
 
     var fba = std.heap.FixedBufferAllocator.init(bitset_data_buf);
     const allocator = fba.allocator();
 
     var i: usize = 0;
-    while (i < data_pages) : (i += 1) {
+    while (i < num_data_pages) : (i += 1) {
         bitset_ptr[i] = BitSet.initEmpty(allocator, slots_per_page) catch unreachable;
     }
 }
 
-fn initShuffles(pool: Ptr, random: std.rand.Random, slots_per_page: usize, data_pages: usize) void {
+fn initShuffles(pool: Ptr, random: std.rand.Random, slots_per_page: usize, num_data_pages: usize) void {
     const base_addr = @ptrToInt(pool);
-    const shuffle_offset = shuffleOffset(slots_per_page, data_pages);
+    const shuffle_offset = shuffleOffset(slots_per_page, num_data_pages);
     const shuffle_ptr = @intToPtr([*]ShuffleVector, base_addr + shuffle_offset);
+    const shuffle_data_offset = shuffleDataOffset(shuffle_offset, num_data_pages);
 
-    const shuffle_data_ptr = @intToPtr([*]ShuffleVector.IndexType, base_addr + shuffleDataOffset(shuffle_offset, data_pages));
-    const shuffle_buf_len = slots_per_page * data_pages;
+    const shuffle_data_ptr = @intToPtr([*]ShuffleVector.IndexType, base_addr + shuffle_data_offset);
+    const shuffle_buf_len = slots_per_page * num_data_pages;
     const shuffle_data_buf = shuffle_data_ptr[0..shuffle_buf_len];
 
     var i: usize = 0;
-    while (i < data_pages) : (i += 1) {
-        shuffle_ptr[i] = ShuffleVector.init(random, shuffle_data_buf[i * slots_per_page .. (i + 1) * slots_per_page]);
+    while (i < num_data_pages) : (i += 1) {
+        const shuffle_data = shuffle_data_buf[i * slots_per_page .. (i + 1) * slots_per_page];
+        shuffle_ptr[i] = ShuffleVector.init(random, shuffle_data);
     }
 }
 
@@ -267,12 +269,14 @@ pub fn freePage(self: Ptr, page_index: usize) void {
     }
 
     var iter = self.partial_pages.first;
-    if (iter != null and self.indexOf(iter.?).page == page_index) {
-        self.partial_pages.first = iter.?.next;
+    if (iter) |first_node| {
+        if (self.indexOf(first_node).page == page_index)
+            self.partial_pages.first = first_node.next;
     } else {
-        while (iter) |node| : (iter = node.next) {
-            if (node.next != null and self.indexOf(node.next.?).page == page_index) {
-                node.next = node.next.?.next;
+        while (iter) |prev_node| : (iter = prev_node.next) {
+            if (prev_node.next) |node| {
+                if (self.indexOf(node).page == page_index)
+                    prev_node.next = node.next;
             }
         }
     }
@@ -330,7 +334,7 @@ pub fn usedSlots(self: ConstPtr) usize {
     return num_full * slots_per_page + count;
 }
 
-pub fn nonEmptyPages(self: ConstPtr) usize {
+pub fn nonEmptyPageCount(self: ConstPtr) usize {
     return self.page_mark - self.empty_pages.len();
 }
 

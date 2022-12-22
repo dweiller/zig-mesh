@@ -17,7 +17,6 @@ const Span = @import("Span.zig");
 const PagePtr = [*]align(page_size) u8;
 
 const page_size = std.mem.page_size;
-const max_pages = params.slab_alignment / page_size;
 
 const log = std.log.scoped(.MeshingPool);
 
@@ -25,7 +24,7 @@ const assert = @import("mesh.zig").assert;
 
 const MeshingPool = @This();
 
-slab: Slab.Ptr,
+first_slab: Slab.Ptr,
 slot_size: u16,
 rng: std.rand.DefaultPrng,
 
@@ -36,28 +35,28 @@ pub fn init(slot_size: usize) !MeshingPool {
 pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
     params.assertSlotSizeValid(slot_size);
     var rng = std.rand.DefaultPrng.init(seed);
-    var slab = try Slab.init(rng.random(), slot_size, max_pages);
+    var slab = try Slab.init(rng.random(), slot_size, params.page_count_max);
     return MeshingPool{
-        .slab = slab,
+        .first_slab = slab,
         .slot_size = @intCast(u16, slot_size),
         .rng = rng,
     };
 }
 
 pub fn deinit(self: *MeshingPool) void {
-    const first = self.slab;
-    var slab = self.slab;
+    const first_slab = self.first_slab;
+    var slab = self.first_slab;
     while (true) {
         const next = slab.next;
         slab.deinit();
-        if (next == first) break;
+        if (next == first_slab) break;
         slab = next;
     }
     self.* = undefined;
 }
 
 pub fn allocSlot(self: *MeshingPool) ?[]u8 {
-    const slab = self.slab;
+    const slab = self.first_slab;
     if (slab.allocSlot()) |slot| return slot;
     log.debug("Current slab at {*} is full, finding alternate slab", .{slab});
     // need to find a new Slab to allocate from
@@ -65,20 +64,20 @@ pub fn allocSlot(self: *MeshingPool) ?[]u8 {
     while (next != slab) : (next = next.next) {
         log.debug("checking slab at {*}\n", .{next});
         if (next.allocSlot()) |slot| {
-            self.slab = next;
+            self.first_slab = next;
             return slot;
         }
     }
     log.debug("All slabs full, allocating new slab", .{});
     // no existing slab has space, allocate a new one
-    var new_slab = Slab.init(self.rng.random(), self.slot_size, max_pages) catch return null;
+    var new_slab = Slab.init(self.rng.random(), self.slot_size, params.page_count_max) catch return null;
     new_slab.next = slab;
     new_slab.prev = slab.prev;
 
     new_slab.prev.next = new_slab;
     slab.prev = new_slab;
 
-    self.slab = new_slab;
+    self.first_slab = new_slab;
     return new_slab.allocSlot() orelse unreachable; // not possible for fresh slab to fail allocating
 }
 
@@ -89,7 +88,7 @@ pub fn freeSlot(self: *MeshingPool, ptr: *anyopaque) void {
 }
 
 pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?Slab.Ptr {
-    const first = self.slab;
+    const first = self.first_slab;
     if (first.ownsPtr(ptr)) return first;
 
     var slab = first.next;
@@ -101,7 +100,7 @@ pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?Slab.Ptr {
 }
 
 pub fn ownsPtr(self: MeshingPool, ptr: *anyopaque) bool {
-    const first = self.slab;
+    const first = self.first_slab;
     if (first.ownsPtr(ptr)) return true;
 
     var slab = first.next;
@@ -207,11 +206,11 @@ fn meshAll(self: *MeshingPool, slab: Slab.Ptr, buf: []u8) void {
 }
 
 fn usedSlots(self: MeshingPool) usize {
-    return self.slab.usedSlots();
+    return self.first_slab.usedSlots();
 }
 
-fn nonEmptyPages(self: MeshingPool) usize {
-    return self.slab.nonEmptyPages();
+fn nonEmptyPageCount(self: MeshingPool) usize {
+    return self.first_slab.nonEmptyPageCount();
 }
 
 test "MeshingPool" {
@@ -219,18 +218,18 @@ test "MeshingPool" {
     defer pool.deinit();
 
     const p1 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
     try std.testing.expectEqual(@as(usize, 1), pool.usedSlots());
 
     const p2 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
     try std.testing.expectEqual(@as(usize, 2), pool.usedSlots());
 
     pool.freeSlot(p1.ptr);
     try std.testing.expectEqual(@as(usize, 1), pool.usedSlots());
 
     const p3 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
     try std.testing.expectEqual(@as(usize, 2), pool.usedSlots());
 
     pool.freeSlot(p3.ptr);
@@ -246,12 +245,12 @@ test "MeshingPool page reclamation" {
     while (i < page_size / 16) : (i += 1) {
         _ = pool.allocSlot() orelse return error.FailedAlloc;
     }
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
     try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
     const p4 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPageCount());
     pool.freeSlot(p4.ptr);
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
 }
 
 test "mesh even and odd" {
@@ -265,7 +264,7 @@ test "mesh even and odd" {
 
         const bytes = pool.allocSlot() orelse return error.FailedAlloc;
         const second_page = i > 255;
-        const index = pool.slab.indexOf(bytes.ptr).slot;
+        const index = pool.first_slab.indexOf(bytes.ptr).slot;
         const pointer_index = if (second_page) @as(usize, index) + 256 else index;
         assert(pointers[pointer_index] == null);
         pointers[pointer_index] = @ptrCast(*u128, @alignCast(16, bytes.ptr));
@@ -278,15 +277,15 @@ test "mesh even and odd" {
     }
 
     log.debug("after writes: first page {d}; second page {d}; pointer[0] ({*}) {d}; pointer[256] ({*}) {d}\n", .{
-        @ptrCast(*u128, @alignCast(16, pool.slab.slot(0, 0).ptr)).*,
-        @ptrCast(*u128, @alignCast(16, pool.slab.slot(1, 0).ptr)).*,
+        @ptrCast(*u128, @alignCast(16, pool.first_slab.slot(0, 0).ptr)).*,
+        @ptrCast(*u128, @alignCast(16, pool.first_slab.slot(1, 0).ptr)).*,
         pointers[0],
         pointers[0].?.*,
         pointers[256],
         pointers[256].?.*,
     });
 
-    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPageCount());
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 1), pointers[1].?.*);
@@ -295,13 +294,16 @@ test "mesh even and odd" {
 
     i = 0;
     while (i < page_size / 16) : (i += 2) {
-        pool.freeSlot(pool.slab.slot(0, i + 1).ptr);
-        pool.freeSlot(pool.slab.slot(1, i).ptr);
+        pool.freeSlot(pool.first_slab.slot(0, i + 1).ptr);
+        pool.freeSlot(pool.first_slab.slot(1, i).ptr);
     }
-    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPageCount());
     try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
 
-    try std.testing.expect(canMesh(.{ .slab = pool.slab, .page = 0 }, .{ .slab = pool.slab, .page = 1 }));
+    try std.testing.expect(canMesh(
+        .{ .slab = pool.first_slab, .page = 0 },
+        .{ .slab = pool.first_slab, .page = 1 },
+    ));
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 2), pointers[2].?.*);
@@ -313,10 +315,10 @@ test "mesh even and odd" {
 
     // waitForInput();
     var buf: [16]u8 = undefined;
-    pool.meshAll(pool.slab, &buf);
+    pool.meshAll(pool.first_slab, &buf);
     // waitForInput();
 
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPages());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
     try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
 
     i = 0;
@@ -346,7 +348,7 @@ fn report(
                 log.debug("\tindex {d} (on page {d}) has value {d} (by pointer {d})\n", .{
                     index,
                     0,
-                    @ptrCast(*u128, @alignCast(16, pool.slab.slot(0, index).ptr)).*,
+                    @ptrCast(*u128, @alignCast(16, pool.first_slab.slot(0, index).ptr)).*,
                     ptr.*,
                 });
             }
