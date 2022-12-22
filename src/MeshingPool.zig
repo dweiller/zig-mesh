@@ -119,22 +119,22 @@ fn meshAll(self: *MeshingPool, buf: []u8) void {
     const num_pages = slab.partial_pages.len() + if (slab.current_index != null) @as(usize, 1) else 0;
     std.debug.assert(num_pages > 1);
 
-    std.debug.assert(num_pages <= std.math.maxInt(Slab.IndexType));
+    std.debug.assert(num_pages <= std.math.maxInt(Slab.SlotIndex));
     // TODO: cache this in Self so we don't need to do it all the time
     const random = self.rng.random();
-    const rand_idx = @ptrCast([*]Slab.IndexType, buf.ptr);
-    const rand_len = buf.len / @sizeOf(Slab.IndexType);
+    const rand_idx = @ptrCast([*]Slab.SlotIndex, buf.ptr);
+    const rand_len = buf.len / @sizeOf(Slab.SlotIndex);
     std.debug.assert(rand_len >= 2 * num_pages);
     var rand_index1 = rand_idx[0..num_pages];
     var rand_index2 = rand_idx[num_pages .. 2 * num_pages];
     for (rand_index1[0..num_pages]) |*r, i| {
-        r.* = @intCast(Slab.IndexType, i);
+        r.* = @intCast(Slab.SlotIndex, i);
     }
-    random.shuffle(Slab.IndexType, rand_index1[0..num_pages]);
+    random.shuffle(Slab.SlotIndex, rand_index1[0..num_pages]);
     for (rand_index2[0..num_pages]) |*r, i| {
-        r.* = @intCast(Slab.IndexType, i);
+        r.* = @intCast(Slab.SlotIndex, i);
     }
-    random.shuffle(Slab.IndexType, rand_index2[0..num_pages]);
+    random.shuffle(Slab.SlotIndex, rand_index2[0..num_pages]);
 
     const max_offset = @min(num_pages, 20);
     var offset_to_random: usize = 0;
@@ -221,7 +221,7 @@ test "mesh even and odd" {
         const bytes = pool.allocSlot() orelse return error.FailedAlloc;
         const second_page = i > 255;
         const index = pool.slab.indexOf(bytes.ptr).slot;
-        const pointer_index = if (second_page) index + 256 else index;
+        const pointer_index = if (second_page) @as(usize, index) + 256 else index;
         std.debug.assert(pointers[pointer_index] == null);
         pointers[pointer_index] = @ptrCast(*[16]u8, bytes.ptr);
 

@@ -34,8 +34,9 @@ const Span = @import("Span.zig");
 const PagePtr = [*]align(page_size) u8;
 
 const page_size = std.mem.page_size;
-pub const IndexType = std.math.IntFittingRange(0, params.max_slot_count - 1);
-const ShuffleVector = @import("shuffle_vector.zig").ShuffleVectorUnmanaged(IndexType);
+pub const PageIndex = u16;
+pub const SlotIndex = std.math.IntFittingRange(0, params.max_slot_count - 1);
+const ShuffleVector = @import("shuffle_vector.zig").ShuffleVectorUnmanaged(SlotIndex);
 
 /// `Slab` cannot be copied (and so should be passed by pointer), as this would detach the metadata from allocations
 const Slab = @This();
@@ -47,7 +48,7 @@ data_start: u16, // number of metadata pages/page offset to first data page
 fd: std.os.fd_t,
 empty_pages: PageList,
 partial_pages: PageList,
-current_index: ?u16,
+current_index: ?PageIndex,
 
 // a PageList.Node for a empty_pages or partial_pages is always stored in a free slot in the associated page
 // so the page index can be gotten by using indexOf(node_ptr), the page index could be stored in the node
@@ -199,7 +200,7 @@ pub fn allocSlot(self: *Slab) ?[]u8 {
     std.debug.assert(page_shuffle.count() > 0);
 
     if (page_shuffle.count() == 1) {
-        self.current_index = if (self.partial_pages.popFirst()) |node| @intCast(u16, self.indexOf(node).page) else null;
+        self.current_index = if (self.partial_pages.popFirst()) |node| self.indexOf(node).page else null;
     }
 
     const slot_index = page_shuffle.pop();
@@ -215,7 +216,7 @@ pub fn allocSlot(self: *Slab) ?[]u8 {
 // returned.
 fn allocSlotSlow(self: *Slab) ?[]u8 {
     if (self.partial_pages.popFirst() orelse self.empty_pages.popFirst()) |node| {
-        self.current_index = @intCast(u16, self.indexOf(node).page);
+        self.current_index = self.indexOf(node).page;
         return self.allocSlot();
     }
 
@@ -291,7 +292,7 @@ pub fn slot(self: *const Slab, page_index: usize, slot_index: usize) []u8 {
     return ptr[0..self.slot_size];
 }
 
-const Index = struct { page: usize, slot: usize };
+const Index = struct { page: PageIndex, slot: SlotIndex };
 pub fn indexOf(self: *const Slab, ptr: *anyopaque) Index {
     std.debug.assert(self.ownsPtr(ptr));
     const addr = @ptrToInt(ptr);
@@ -299,7 +300,10 @@ pub fn indexOf(self: *const Slab, ptr: *anyopaque) Index {
     const page_index = offset / page_size - self.data_start;
     const intra_page_offset = offset % page_size;
     const intra_page_index = intra_page_offset / self.slot_size;
-    return Index{ .page = page_index, .slot = intra_page_index };
+    return Index{
+        .page = @intCast(PageIndex, page_index),
+        .slot = @intCast(SlotIndex, intra_page_index),
+    };
 }
 
 test {
