@@ -51,6 +51,8 @@ fd: std.os.fd_t,
 empty_pages: PageList,
 partial_pages: PageList,
 current_index: ?PageIndex,
+next: *align(params.slab_alignment) Slab,
+prev: *align(params.slab_alignment) Slab,
 
 // a PageList.Node for a empty_pages or partial_pages is always stored in a free slot in the associated page
 // so the page index can be gotten by using indexOf(node_ptr), the page index could be stored in the node
@@ -127,6 +129,8 @@ pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !*align
         .partial_pages = .{},
         .empty_pages = .{},
         .current_index = null,
+        .next = slab,
+        .prev = slab,
     };
 
     // TODO: consider lazy initialisation (i.e. an initPage(index) function that sets up a bitset/shuffle pair)
@@ -322,6 +326,10 @@ pub fn usedSlots(self: *const Slab) usize {
     const num_empty = self.empty_pages.len();
     const num_full = self.page_mark - num_empty - num_partial;
     return num_full * slots_per_page + count;
+}
+
+pub fn nonEmptyPages(self: *const Slab) usize {
+    return self.page_mark - self.empty_pages.len();
 }
 
 test {

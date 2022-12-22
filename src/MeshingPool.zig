@@ -17,6 +17,7 @@ const Span = @import("Span.zig");
 const PagePtr = [*]align(page_size) u8;
 
 const page_size = std.mem.page_size;
+const max_pages = params.slab_alignment / page_size;
 
 const log = std.log.scoped(.MeshingPool);
 
@@ -24,7 +25,6 @@ const assert = @import("mesh.zig").assert;
 
 const MeshingPool = @This();
 
-// TODO: use multiple slabs
 slab: *align(params.slab_alignment) Slab,
 slot_size: u16,
 rng: std.rand.DefaultPrng,
@@ -36,7 +36,7 @@ pub fn init(slot_size: usize) !MeshingPool {
 pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
     params.assertSlotSizeValid(slot_size);
     var rng = std.rand.DefaultPrng.init(seed);
-    var slab = try Slab.init(rng.random(), slot_size, params.slab_alignment / page_size);
+    var slab = try Slab.init(rng.random(), slot_size, max_pages);
     return MeshingPool{
         .slab = slab,
         .slot_size = @intCast(u16, slot_size),
@@ -45,23 +45,71 @@ pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
 }
 
 pub fn deinit(self: *MeshingPool) void {
-    self.slab.deinit();
+    const first = self.slab;
+    var slab = self.slab;
+    while (true) {
+        const next = slab.next;
+        slab.deinit();
+        if (next == first) break;
+        slab = next;
+    }
     self.* = undefined;
 }
 
 pub fn allocSlot(self: *MeshingPool) ?[]u8 {
     const slab = self.slab;
-    return slab.allocSlot();
+    if (slab.allocSlot()) |slot| return slot;
+    log.debug("Current slab at {*} is full, finding alternate slab", .{slab});
+    // need to find a new Slab to allocate from
+    var next = slab.next;
+    while (next != slab) : (next = next.next) {
+        log.debug("checking slab at {*}\n", .{next});
+        if (next.allocSlot()) |slot| {
+            self.slab = next;
+            return slot;
+        }
+    }
+    log.debug("All slabs full, allocating new slab", .{});
+    // no existing slab has space, allocate a new one
+    var new_slab = Slab.init(self.rng.random(), self.slot_size, max_pages) catch return null;
+    new_slab.next = slab;
+    new_slab.prev = slab.prev;
+
+    new_slab.prev.next = new_slab;
+    slab.prev = new_slab;
+
+    self.slab = new_slab;
+    return new_slab.allocSlot() orelse unreachable; // not possible for fresh slab to fail allocating
 }
 
 pub fn freeSlot(self: *MeshingPool, ptr: *anyopaque) void {
     assert(self.ownsPtr(ptr));
-    const slab = self.slab;
+    const slab = self.owningSlab(ptr) orelse unreachable;
     slab.freeSlot(self.rng.random(), slab.indexOf(ptr));
 }
 
+pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?*align(params.slab_alignment) Slab {
+    const first = self.slab;
+    if (first.ownsPtr(ptr)) return first;
+
+    var slab = first.next;
+    while (slab != first) : (slab = slab.next) {
+        if (slab.ownsPtr(ptr)) return slab;
+    }
+
+    return null;
+}
+
 pub fn ownsPtr(self: MeshingPool, ptr: *anyopaque) bool {
-    return self.slab.ownsPtr(ptr);
+    const first = self.slab;
+    if (first.ownsPtr(ptr)) return true;
+
+    var slab = first.next;
+    while (slab != first) : (slab = slab.next) {
+        if (slab.ownsPtr(ptr)) return true;
+    }
+
+    return false;
 }
 
 fn canMesh(self: MeshingPool, page1_index: usize, page2_index: usize) bool {
@@ -156,7 +204,7 @@ fn usedSlots(self: MeshingPool) usize {
 }
 
 fn nonEmptyPages(self: MeshingPool) usize {
-    return self.slab.page_mark - self.slab.empty_pages.len();
+    return self.slab.nonEmptyPages();
 }
 
 test "MeshingPool" {

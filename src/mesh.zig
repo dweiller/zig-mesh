@@ -127,7 +127,7 @@ fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_ad
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshingPool), ctx));
     for (self.pools[0..self.num_size_classes]) |*pool, index| {
         if (pool.ownsPtr(buf.ptr)) {
-            log.debug("pool {d} (slot size {d}) owns the allocation to be resized", .{index, pool.slot_size});
+            log.debug("pool {d} (slot size {d}) owns the allocation to be resized", .{ index, pool.slot_size });
             const page_offset = @ptrToInt(buf.ptr) % std.mem.page_size;
             const slot_index = page_offset / pool.slot_size;
             const new_end_index = (page_offset + new_len - 1) / pool.slot_size;
@@ -154,10 +154,10 @@ fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_ad
 
 fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshAllocator), ctx));
-    inline for (self.pools) |*pool| {
-        if (pool.ownsPtr(buf.ptr)) {
-            log.debug("pool {d} owns the pointer to be freed", .{pool.slot_size});
-            pool.freeSlot(buf.ptr);
+    for (self.pools[0..self.num_size_classes]) |*pool, index| {
+        if (pool.owningSlab(buf.ptr)) |slab| {
+            log.debug("slab at {*} in pool {d} (slot size {d}) owns the pointer to be freed", .{ slab, index, pool.slot_size });
+            slab.freeSlot(pool.rng.random(), slab.indexOf(buf.ptr));
             return;
         }
     }
