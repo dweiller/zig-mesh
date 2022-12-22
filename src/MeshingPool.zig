@@ -116,10 +116,9 @@ fn meshPages(
 
 fn meshAll(self: *MeshingPool, buf: []u8) void {
     const slab = self.slab;
-    if (slab.partial_pages.first == null or (slab.partial_pages.first.?.next == null and slab.current_index == null)) return;
 
     const num_pages = slab.partial_pages.len() + if (slab.current_index != null) @as(usize, 1) else 0;
-    assert(num_pages > 1);
+    if (num_pages <= 1) return;
 
     assert(num_pages <= std.math.maxInt(Slab.SlotIndex));
     // TODO: cache this in Self so we don't need to do it all the time
@@ -154,7 +153,7 @@ fn meshAll(self: *MeshingPool, buf: []u8) void {
 
 fn usedSlots(self: MeshingPool) usize {
     var count: usize = if (self.slab.current_index) |index| self.slab.bitset(index).count() else 0;
-    var num_partial: usize = 0;
+    var num_partial: usize = if (self.slab.current_index != null) 1 else 0;
     var iter = self.slab.partial_pages.first;
     while (iter) |node| : (iter = node.next) {
         num_partial += 1;
@@ -163,7 +162,7 @@ fn usedSlots(self: MeshingPool) usize {
     }
     const slots_per_page = page_size / self.slot_size;
     const num_empty = self.slab.empty_pages.len();
-    const num_full = self.slab.page_mark - num_empty - num_partial - if (self.slab.current_index != null) @as(usize, 1) else 0;
+    const num_full = self.slab.page_mark - num_empty - num_partial;
     return num_full * slots_per_page + count;
 }
 
