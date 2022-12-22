@@ -25,7 +25,7 @@ const assert = @import("mesh.zig").assert;
 
 const MeshingPool = @This();
 
-slab: *align(params.slab_alignment) Slab,
+slab: Slab.Ptr,
 slot_size: u16,
 rng: std.rand.DefaultPrng,
 
@@ -88,7 +88,7 @@ pub fn freeSlot(self: *MeshingPool, ptr: *anyopaque) void {
     slab.freeSlot(self.rng.random(), slab.indexOf(ptr));
 }
 
-pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?*align(params.slab_alignment) Slab {
+pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?Slab.Ptr {
     const first = self.slab;
     if (first.ownsPtr(ptr)) return first;
 

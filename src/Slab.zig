@@ -42,6 +42,8 @@ const assert = @import("mesh.zig").assert;
 
 /// `Slab` cannot be copied (and so should be passed by pointer), as this would detach the metadata from allocations
 const Slab = @This();
+pub const Ptr = *align(params.slab_alignment) Slab;
+pub const ConstPtr = *align(params.slab_alignment) const Slab;
 
 page_mark: u16,
 slot_size: u16,
@@ -51,8 +53,8 @@ fd: std.os.fd_t,
 empty_pages: PageList,
 partial_pages: PageList,
 current_index: ?PageIndex,
-next: *align(params.slab_alignment) Slab,
-prev: *align(params.slab_alignment) Slab,
+next: Ptr,
+prev: Ptr,
 
 // a PageList.Node for a empty_pages or partial_pages is always stored in a free slot in the associated page
 // so the page index can be gotten by using indexOf(node_ptr), the page index could be stored in the node
@@ -100,7 +102,7 @@ fn metadataPageCount(slots_per_page: usize, data_page_count: usize) usize {
     return std.mem.alignForward(one_past_metadata_end, page_size) / page_size;
 }
 
-pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !*align(params.slab_alignment) Slab {
+pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !Ptr {
     params.assertSlotSizeValid(slot_size);
     params.assertMaxPagesValid(max_pages);
 
@@ -118,7 +120,7 @@ pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !*align
     // const page_count = data_pages + metadata_pages;
 
     const span = try Span.init(params.slab_alignment, page_count);
-    const slab = @ptrCast(*Slab, @alignCast(params.slab_alignment, span.ptr));
+    const slab = @ptrCast(Ptr, @alignCast(params.slab_alignment, span.ptr));
 
     slab.* = Slab{
         .slot_size = @intCast(u16, slot_size),
@@ -139,7 +141,7 @@ pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !*align
     return slab;
 }
 
-fn initBitSets(pool: *Slab, slots_per_page: usize, data_pages: usize) void {
+fn initBitSets(pool: Ptr, slots_per_page: usize, data_pages: usize) void {
     const base_addr = @ptrToInt(pool);
     const bitset_ptr = @intToPtr([*]BitSet, base_addr + bitset_offset);
 
@@ -159,7 +161,7 @@ fn initBitSets(pool: *Slab, slots_per_page: usize, data_pages: usize) void {
     }
 }
 
-fn initShuffles(pool: *Slab, random: std.rand.Random, slots_per_page: usize, data_pages: usize) void {
+fn initShuffles(pool: Ptr, random: std.rand.Random, slots_per_page: usize, data_pages: usize) void {
     const base_addr = @ptrToInt(pool);
     const shuffle_offset = shuffleOffset(slots_per_page, data_pages);
     const shuffle_ptr = @intToPtr([*]ShuffleVector, base_addr + shuffle_offset);
@@ -175,7 +177,7 @@ fn initShuffles(pool: *Slab, random: std.rand.Random, slots_per_page: usize, dat
 }
 
 /// unmap the memory backing a `Slab`
-pub fn deinit(self: *align(params.slab_alignment) Slab) void {
+pub fn deinit(self: Ptr) void {
     var span = Span{
         .page_count = self.page_count,
         .ptr = @ptrCast(PagePtr, self),
@@ -184,11 +186,11 @@ pub fn deinit(self: *align(params.slab_alignment) Slab) void {
     span.deinit();
 }
 
-pub fn dataPage(self: *const Slab, page_index: usize) PagePtr {
+pub fn dataPage(self: ConstPtr, page_index: usize) PagePtr {
     return @intToPtr(PagePtr, @ptrToInt(self) + (self.data_start + page_index) * page_size);
 }
 
-pub fn ownsPtr(self: *const Slab, ptr: *anyopaque) bool {
+pub fn ownsPtr(self: ConstPtr, ptr: *anyopaque) bool {
     // WARNING: does not check ptr is within the page range given by page_count and data_start
     return @ptrToInt(self) == slabAddress(ptr);
 }
@@ -197,7 +199,7 @@ pub fn slabAddress(ptr: *anyopaque) usize {
     return std.mem.alignBackward(@ptrToInt(ptr), params.slab_alignment);
 }
 
-pub fn allocSlot(self: *Slab) ?[]u8 {
+pub fn allocSlot(self: Ptr) ?[]u8 {
     const page_index = self.current_index orelse return self.allocSlotSlow();
 
     const page_shuffle = self.shuffle(page_index);
@@ -220,7 +222,7 @@ pub fn allocSlot(self: *Slab) ?[]u8 {
 // allocation slow path, need to grab never used page (if there is one) or initialise new slab
 // Returns the slice of the allocatted slot, unless the `Slab` is full, in which case `null` is
 // returned.
-fn allocSlotSlow(self: *Slab) ?[]u8 {
+fn allocSlotSlow(self: Ptr) ?[]u8 {
     if (self.partial_pages.popFirst() orelse self.empty_pages.popFirst()) |node| {
         self.current_index = self.indexOf(node).page;
         return self.allocSlot();
@@ -238,7 +240,7 @@ fn allocSlotSlow(self: *Slab) ?[]u8 {
     return null;
 }
 
-pub fn freeSlot(self: *Slab, random: std.rand.Random, index: Index) void {
+pub fn freeSlot(self: Ptr, random: std.rand.Random, index: Index) void {
     const page_bitset = self.bitset(index.page);
     const page_shuffle = self.shuffle(index.page);
 
@@ -259,7 +261,7 @@ pub fn freeSlot(self: *Slab, random: std.rand.Random, index: Index) void {
     }
 }
 
-pub fn freePage(self: *Slab, page_index: usize) void {
+pub fn freePage(self: Ptr, page_index: usize) void {
     if (self.current_index) |index| {
         if (page_index == index) self.current_index = null;
     }
@@ -281,25 +283,25 @@ pub fn freePage(self: *Slab, page_index: usize) void {
     std.os.madvise(@ptrCast([*]u8, page), page_size, std.os.MADV.DONTNEED) catch @panic("couldn't madvise");
 }
 
-pub fn bitset(self: *const Slab, page_index: usize) *BitSet {
+pub fn bitset(self: ConstPtr, page_index: usize) *BitSet {
     const offset = bitset_offset + @sizeOf(BitSet) * page_index;
     return @intToPtr(*BitSet, @ptrToInt(self) + offset);
 }
 
-pub fn shuffle(self: *const Slab, page_index: usize) *ShuffleVector {
+pub fn shuffle(self: ConstPtr, page_index: usize) *ShuffleVector {
     const slots_per_page = page_size / self.slot_size;
     const self_shuffle_offset = shuffleOffset(slots_per_page, self.page_count - self.data_start);
     const offset = self_shuffle_offset + @sizeOf(ShuffleVector) * page_index;
     return @intToPtr(*ShuffleVector, @ptrToInt(self) + offset);
 }
 
-pub fn slot(self: *const Slab, page_index: usize, slot_index: usize) []u8 {
+pub fn slot(self: ConstPtr, page_index: usize, slot_index: usize) []u8 {
     const ptr = @ptrCast([*]u8, self.dataPage(page_index)) + slot_index * self.slot_size;
     return ptr[0..self.slot_size];
 }
 
 const Index = struct { page: PageIndex, slot: SlotIndex };
-pub fn indexOf(self: *const Slab, ptr: *anyopaque) Index {
+pub fn indexOf(self: ConstPtr, ptr: *anyopaque) Index {
     assert(self.ownsPtr(ptr));
     const addr = @ptrToInt(ptr);
     const offset = addr - @ptrToInt(self);
@@ -312,7 +314,7 @@ pub fn indexOf(self: *const Slab, ptr: *anyopaque) Index {
     };
 }
 
-pub fn usedSlots(self: *const Slab) usize {
+pub fn usedSlots(self: ConstPtr) usize {
     var count: usize = if (self.current_index) |index| self.bitset(index).count() else 0;
     var num_partial: usize = if (self.current_index) |_| 1 else 0;
     var iter = self.partial_pages.first;
@@ -328,7 +330,7 @@ pub fn usedSlots(self: *const Slab) usize {
     return num_full * slots_per_page + count;
 }
 
-pub fn nonEmptyPages(self: *const Slab) usize {
+pub fn nonEmptyPages(self: ConstPtr) usize {
     return self.page_mark - self.empty_pages.len();
 }
 
