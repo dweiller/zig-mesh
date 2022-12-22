@@ -104,7 +104,10 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
             if (maxOffset(size, alignment) + len <= size) {
                 const pool = &self.pools[index];
                 const slot = pool.allocSlot() orelse return null;
-                log.debug("allocation of size {d} in pool {d} created in slot at {*}", .{ len, size, slot });
+                log.debug(
+                    "allocation of size {d} in pool {d} (slot size {d}) created at {*}",
+                    .{ len, index, size, slot },
+                );
                 return std.mem.alignPointer(slot.ptr, alignment) orelse unreachable;
             }
         }
@@ -122,9 +125,9 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
 
 fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshingPool), ctx));
-    for (self.pools[0..self.num_size_classes]) |*pool| {
+    for (self.pools[0..self.num_size_classes]) |*pool, index| {
         if (pool.ownsPtr(buf.ptr)) {
-            log.debug("pool {d} owns the allocation to be resized", .{pool.slot_size});
+            log.debug("pool {d} (slot size {d}) owns the allocation to be resized", .{index, pool.slot_size});
             const page_offset = @ptrToInt(buf.ptr) % std.mem.page_size;
             const slot_index = page_offset / pool.slot_size;
             const new_end_index = (page_offset + new_len - 1) / pool.slot_size;
