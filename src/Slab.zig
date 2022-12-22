@@ -50,9 +50,9 @@ slot_size: u16,
 page_count: u16,
 data_start: u16, // number of metadata pages/page offset to first data page
 fd: std.os.fd_t,
+current_index: ?PageIndex,
 empty_pages: PageList,
 partial_pages: PageList,
-current_index: ?PageIndex,
 next: Ptr,
 prev: Ptr,
 
@@ -92,14 +92,17 @@ fn shuffleDataOffset(shuffle_offset: usize, data_page_count: usize) usize {
     );
 }
 
-fn metadataPageCount(slots_per_page: usize, data_page_count: usize) usize {
+fn metadataSize(slots_per_page: usize, data_page_count: usize) usize {
     const shuffle_offset = shuffleOffset(slots_per_page, data_page_count);
     const shuffle_data_offset = shuffleDataOffset(shuffle_offset, data_page_count);
     const shuffle_data_bytes_total = slots_per_page * data_page_count * @sizeOf(ShuffleVector.IndexType);
 
-    const one_past_metadata_end = shuffle_data_offset + shuffle_data_bytes_total;
+    return shuffle_data_offset + shuffle_data_bytes_total;
+}
 
-    return std.mem.alignForward(one_past_metadata_end, page_size) / page_size;
+fn metadataPageCount(slots_per_page: usize, data_page_count: usize) usize {
+    const metadata_size = metadataSize(slots_per_page, data_page_count);
+    return std.mem.alignForward(metadata_size, page_size) / page_size;
 }
 
 pub fn init(random: std.rand.Random, slot_size: usize, page_count_max: usize) !Ptr {
