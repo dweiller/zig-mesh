@@ -76,7 +76,6 @@ pub fn ShuffleVectorGeneric(comptime T: type, comptime static: ?comptime_int) ty
         pub fn count(self: Self) usize {
             return self.unmanaged.count();
         }
-
     };
 }
 
