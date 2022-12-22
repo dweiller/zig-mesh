@@ -118,9 +118,9 @@ fn meshPages(
 
 fn meshAll(self: *MeshingPool, buf: []u8) void {
     const slab = self.slab;
-    if (slab.partial_pages.first == null or slab.partial_pages.first.?.next == null) return;
+    if (slab.partial_pages.first == null or (slab.partial_pages.first.?.next == null and slab.current_index == null)) return;
 
-    const num_pages = slab.partial_pages.len();
+    const num_pages = slab.partial_pages.len() + if (slab.current_index != null) @as(usize, 1) else 0;
     std.debug.assert(num_pages > 1);
 
     std.debug.assert(num_pages <= std.math.maxInt(Slab.IndexType));
@@ -155,7 +155,7 @@ fn meshAll(self: *MeshingPool, buf: []u8) void {
 }
 
 fn usedSlots(self: MeshingPool) usize {
-    var count: usize = 0;
+    var count: usize = if (self.slab.current_index) |index| self.slab.bitset(index).count() else 0;
     var num_partial: usize = 0;
     var iter = self.slab.partial_pages.first;
     while (iter) |node| : (iter = node.next) {
@@ -165,7 +165,7 @@ fn usedSlots(self: MeshingPool) usize {
     }
     const slots_per_page = page_size / self.slot_size;
     const num_empty = self.slab.empty_pages.len();
-    const num_full = self.slab.page_mark - num_empty - num_partial;
+    const num_full = self.slab.page_mark - num_empty - num_partial - if (self.slab.current_index != null) @as(usize, 1) else 0;
     return num_full * slots_per_page + count;
 }
 
@@ -311,12 +311,12 @@ fn report(
             .after_alloc => "after allocating index {d}\n",
             .after_write => "after writing index {d}\n",
         }, .{i});
-        if (pool.slab.partial_pages.first) |node| {
-            const page_index = pool.slab.indexOf(node).page;
+        if (pool.slab.current_index) |page_index| {
             inline for (.{ 0, 1, 2 }) |index| {
                 if (pointers[index]) |ptr| {
-                    log.debug("\tindex {d} has value {d} (by pointer {d})\n", .{
+                    log.debug("\tindex {d} (on page {d}) has value {d} (by pointer {d})\n", .{
                         index,
+                        page_index,
                         @bitCast(u128, @ptrCast(*[16]u8, pool.slab.slot(page_index, index).ptr).*),
                         @bitCast(u128, ptr.*),
                     });

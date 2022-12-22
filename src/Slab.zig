@@ -47,7 +47,11 @@ data_start: u16, // number of metadata pages/page offset to first data page
 fd: std.os.fd_t,
 empty_pages: PageList,
 partial_pages: PageList,
+current_index: ?u16,
 
+// a PageList.Node for a empty_pages or partial_pages is always stored in a free slot in the associated page
+// so the page index can be gotten by using indexOf(node_ptr), the page index could be stored in the node
+// though indexOf should reduce cache pollution, as it only loads from the Slab header
 const PageList = std.SinglyLinkedList(void);
 comptime {
     std.debug.assert(@sizeOf(PageList.Node) <= params.slot_size_min);
@@ -119,6 +123,7 @@ pub fn init(random: std.rand.Random, slot_size: usize, max_pages: usize) !*align
         .fd = span.fd,
         .partial_pages = .{},
         .empty_pages = .{},
+        .current_index = null,
     };
 
     // TODO: consider lazy initialisation (i.e. an initPage(index) function that sets up a bitset/shuffle pair)
@@ -186,8 +191,7 @@ pub fn slabAddress(ptr: *anyopaque) usize {
 }
 
 pub fn allocSlot(self: *Slab) ?[]u8 {
-    const node = self.partial_pages.popFirst() orelse return self.allocSlotSlow();
-    const page_index = self.indexOf(node).page;
+    const page_index = self.current_index orelse return self.allocSlotSlow();
 
     const page_shuffle = self.shuffle(page_index);
     const page_bitset = self.bitset(page_index);
@@ -195,7 +199,7 @@ pub fn allocSlot(self: *Slab) ?[]u8 {
     std.debug.assert(page_shuffle.count() > 0);
 
     if (page_shuffle.count() == 1) {
-        self.partial_pages.first = node.next;
+        self.current_index = if (self.partial_pages.popFirst()) |node| @intCast(u16, self.indexOf(node).page) else null;
     }
 
     const slot_index = page_shuffle.pop();
@@ -203,20 +207,15 @@ pub fn allocSlot(self: *Slab) ?[]u8 {
 
     page_bitset.set(slot_index);
 
-    if (page_shuffle.peek()) |next_slot_index| {
-        const addr = @ptrToInt(self.dataPage(page_index)) + next_slot_index * self.slot_size;
-        const new_node = @intToPtr(*PageList.Node, addr);
-        new_node.* = PageList.Node{ .data = {} };
-        self.partial_pages.prepend(new_node);
-    }
-
     return self.slot(page_index, slot_index);
 }
 
 // allocation slow path, need to grab never used page (if there is one) or initialise new slab
+// Returns the slice of the allocatted slot, unless the `Slab` is full, in which case `null` is
+// returned.
 fn allocSlotSlow(self: *Slab) ?[]u8 {
-    if (self.empty_pages.popFirst()) |node| {
-        self.partial_pages.prepend(node);
+    if (self.partial_pages.popFirst() orelse self.empty_pages.popFirst()) |node| {
+        self.current_index = @intCast(u16, self.indexOf(node).page);
         return self.allocSlot();
     }
 
@@ -225,14 +224,11 @@ fn allocSlotSlow(self: *Slab) ?[]u8 {
         const page_index = self.page_mark;
         self.page_mark += 1;
 
-        const node = @ptrCast(*PageList.Node, self.dataPage(page_index));
-        node.* = PageList.Node{ .data = {} };
-        self.partial_pages.prepend(node);
+        self.current_index = page_index;
         return self.allocSlot();
     }
 
-    // the slab is full
-    @panic("TODO: implement allocation slow path");
+    return null;
 }
 
 pub fn freeSlot(self: *Slab, random: std.rand.Random, index: Index) void {
@@ -245,8 +241,8 @@ pub fn freeSlot(self: *Slab, random: std.rand.Random, index: Index) void {
     const count = page_bitset.count();
     if (count == page_bitset.bit_length - 1) {
         // was a full page, need to add to partial list
-        const addr = @ptrToInt(self.dataPage(index.page)) + index.slot * self.slot_size;
-        const node = @intToPtr(*PageList.Node, addr);
+        const freed_slot = self.slot(index.page, index.slot);
+        const node = @ptrCast(*PageList.Node, @alignCast(@alignOf(PageList.Node), freed_slot.ptr));
         node.* = PageList.Node{ .data = {} };
         self.partial_pages.prepend(node);
     } else if (count > 0) {
@@ -257,6 +253,10 @@ pub fn freeSlot(self: *Slab, random: std.rand.Random, index: Index) void {
 }
 
 pub fn freePage(self: *Slab, page_index: usize) void {
+    if (self.current_index) |index| {
+        if (page_index == index) self.current_index = null;
+    }
+
     var iter = self.partial_pages.first;
     if (iter != null and self.indexOf(iter.?).page == page_index) {
         self.partial_pages.first = iter.?.next;
