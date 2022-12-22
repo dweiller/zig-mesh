@@ -20,10 +20,6 @@ const page_size = std.mem.page_size;
 
 const log = std.log.scoped(.MeshingPool);
 
-fn todo(message: []const u8) noreturn {
-    @panic("TODO: " ++ message);
-}
-
 const MeshingPool = @This();
 
 // TODO: use multiple slabs
