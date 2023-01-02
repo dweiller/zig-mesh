@@ -123,6 +123,10 @@ pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptim
                 }
             };
 
+        pub fn clear(self: *Self) void {
+            self.indices.resize(0) catch unreachable;
+        }
+
         pub fn push(self: *Self, random: Random, index: IndexType) !void {
             try self.indices.append(index);
             self.pushSwap(random);
@@ -134,7 +138,7 @@ pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptim
         }
 
         pub fn pushSwap(self: *Self, random: Random) void {
-            const len = self.indices.buffer.len;
+            const len = self.count();
             const swap_offset = random.uintLessThan(usize, len);
             std.mem.swap(IndexType, &self.indices.buffer[swap_offset], &self.indices.buffer[len - 1]);
         }
@@ -148,12 +152,12 @@ pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptim
         }
 
         pub fn peek(self: Self) ?T {
-            if (self.indices.buffer.len == 0) return null;
-            return self.indices.buffer[self.indices.buffer.len - 1];
+            if (self.count() == 0) return null;
+            return self.indices.buffer[self.count() - 1];
         }
 
         pub inline fn count(self: Self) usize {
-            return self.indices.buffer.len;
+            return if (static == null) self.indices.buffer.len else self.indices.len;
         }
     };
 }
@@ -174,6 +178,11 @@ pub fn FixedBuffer(comptime T: type) type {
                 .buffer = buffer[0..len],
                 .capacity = buffer.len,
             };
+        }
+
+        pub fn resize(self: *Self, new_len: usize) !void {
+            if (new_len > self.capacity) return error.Overflow;
+            self.buffer.len = new_len;
         }
 
         pub fn hasUnusedCapacity(self: *Self, additional_count: usize) bool {

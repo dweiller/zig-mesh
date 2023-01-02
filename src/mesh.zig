@@ -98,13 +98,13 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshAllocator), ctx));
     const alignment = @as(usize, 1) << @intCast(Allocator.Log2Align, log2_ptr_align);
     for (self.size_classes[0..self.num_size_classes]) |size, index| {
-        if (len <= size and alignment <= size) {
+        if (len <= size and alignment + len <= size) {
             if (maxOffset(size, alignment) + len <= size) {
                 const pool = &self.pools[index];
                 const slot = pool.allocSlot() orelse return null;
                 log.debug(
-                    "allocation of size {d} in pool {d} (slot size {d}) created at {*}",
-                    .{ len, index, size, slot },
+                    "allocation of size {d} in pool {d} (slot size {d}) created in slot {d} at address {*}",
+                    .{ len, index, size, pool.owningSlab(slot.ptr).?.indexOf(slot.ptr), slot },
                 );
                 return std.mem.alignPointer(slot.ptr, alignment) orelse unreachable;
             }
@@ -124,16 +124,11 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
 fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshingPool), ctx));
     for (self.pools[0..self.num_size_classes]) |*pool, index| {
-        if (pool.ownsPtr(buf.ptr)) {
+        if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("pool {d} (slot size {d}) owns the allocation to be resized", .{ index, pool.slot_size });
-            const page_offset = @ptrToInt(buf.ptr) % std.mem.page_size;
-            const slot_index = page_offset / pool.slot_size;
-            const new_end_index = (page_offset + new_len - 1) / pool.slot_size;
-
-            return if (new_end_index != slot_index)
-                false
-            else
-                true;
+            const slot_index = slab.indexOf(buf.ptr);
+            const new_last_ptr = buf.ptr + new_len - 1;
+            return slab.isInSlot(new_last_ptr, slot_index);
         }
     }
     // must be a large allocation
@@ -155,7 +150,7 @@ fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
     for (self.pools[0..self.num_size_classes]) |*pool, index| {
         if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("slab at {*} in pool {d} (slot size {d}) owns the pointer to be freed", .{ slab, index, pool.slot_size });
-            slab.freeSlot(pool.rng.random(), slab.indexOf(buf.ptr));
+            pool.freeSlotInSlab(buf.ptr, slab);
             return;
         }
     }

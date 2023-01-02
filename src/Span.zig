@@ -18,7 +18,7 @@ const assert = @import("mesh.zig").assert;
 
 const Span = @This();
 
-page_count: u16, // would allow for up to page_size * (2 ^ 16 - 1) total bytes (4KiB under 256MiB for 4KiB pages)
+page_count: usize,
 ptr: [*]align(page_size) u8, // pointer to the mapped memory
 fd: std.os.fd_t, // a valid file descriptor is required for remapping addresses
 

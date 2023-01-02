@@ -15,6 +15,7 @@ const Slab = @import("Slab.zig");
 const Span = @import("Span.zig");
 
 const PagePtr = [*]align(page_size) u8;
+const ShuffleVector = @import("shuffle_vector.zig").StaticShuffleVectorUnmanaged(params.slots_per_slab_max);
 
 const page_size = std.mem.page_size;
 
@@ -24,9 +25,12 @@ const assert = @import("mesh.zig").assert;
 
 const MeshingPool = @This();
 
-first_slab: Slab.Ptr,
+partial_slabs: ?Slab.Ptr,
+empty_slabs: ?Slab.Ptr,
+full_slabs: ?Slab.Ptr,
 slot_size: u16,
 rng: std.rand.DefaultPrng,
+shuffle: ShuffleVector,
 
 pub fn init(slot_size: usize) !MeshingPool {
     return initSeeded(slot_size, 0);
@@ -35,182 +39,291 @@ pub fn init(slot_size: usize) !MeshingPool {
 pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
     params.assertSlotSizeValid(slot_size);
     var rng = std.rand.DefaultPrng.init(seed);
-    var slab = try Slab.init(rng.random(), slot_size, params.page_count_max);
     return MeshingPool{
-        .first_slab = slab,
+        .partial_slabs = null,
+        .empty_slabs = null,
+        .full_slabs = null,
         .slot_size = @intCast(u16, slot_size),
         .rng = rng,
+        .shuffle = ShuffleVector{ .indices = .{} },
     };
 }
 
 pub fn deinit(self: *MeshingPool) void {
-    const first_slab = self.first_slab;
-    var slab = self.first_slab;
-    while (true) {
-        const next = slab.next;
-        slab.deinit();
-        if (next == first_slab) break;
-        slab = next;
+    if (self.partial_slabs) |first| {
+        var slab = first;
+        while (true) {
+            const next = slab.next;
+            slab.deinit();
+            if (next == first) break;
+            slab = next;
+        }
+        self.* = undefined;
     }
-    self.* = undefined;
+}
+
+const List = enum { partial, empty, full };
+fn removeFromList(self: *MeshingPool, comptime which: List, slab: Slab.Ptr) void {
+    switch (which) {
+        inline else => |l| {
+            @field(self, @tagName(l) ++ "_slabs") = if (slab.next == slab) null else slab.next;
+            slab.removeFromList();
+        },
+    }
+}
+
+fn appendToList(self: *MeshingPool, comptime which: List, slab: Slab.Ptr) void {
+    switch (which) {
+        inline else => |l| {
+            if (@field(self, @tagName(l) ++ "_slabs")) |list| {
+                list.append(slab);
+            } else {
+                @field(self, @tagName(l) ++ "_slabs") = slab;
+            }
+        },
+    }
+}
+
+fn moveSlab(self: *MeshingPool, comptime from: List, comptime to: List, slab: Slab.Ptr) void {
+    self.removeFromList(from, slab);
+    self.appendToList(to, slab);
+}
+
+fn adoptSlab(self: *MeshingPool, slab: Slab.Ptr) void {
+    const list = if (slab.isEmpty()) .empty else if (slab.isFull()) .full else .partial;
+    self.appendToList(list, slab);
+}
+
+fn adoptSlabAsCurrent(self: *MeshingPool, slab: Slab.Ptr) void {
+    log.debug("pool {*} adopting slab {*} as its current slab", .{ self, slab });
+    self.appendToList(.partial, slab);
+    self.partial_slabs = slab;
+    self.initShuffleForCurrent();
+}
+
+fn initShuffleForCurrent(self: *MeshingPool) void {
+    self.shuffle.clear();
+    const random = self.rng.random();
+    var iter = self.partial_slabs.?.bitset.iterator(.{ .kind = .unset });
+    while (iter.next()) |index| {
+        if (index >= self.partial_slabs.?.slot_count) break;
+        self.shuffle.pushAssumeCapacity(random, @intCast(ShuffleVector.IndexType, index));
+    }
 }
 
 pub fn allocSlot(self: *MeshingPool) ?[]u8 {
-    const slab = self.first_slab;
-    if (slab.allocSlot()) |slot| return slot;
-    log.debug("Current slab at {*} is full, finding alternate slab", .{slab});
-    // need to find a new Slab to allocate from
-    var next = slab.next;
-    while (next != slab) : (next = next.next) {
-        log.debug("checking slab at {*}\n", .{next});
-        if (next.allocSlot()) |slot| {
-            self.first_slab = next;
-            return slot;
-        }
+    var slab = self.partial_slabs orelse return self.allocSlotSlow();
+    assert(slab.usedSlots() < slab.slot_count);
+
+    const slot_index = self.shuffle.pop();
+    log.debug("allocating slot {d} in slab at {*}", .{ slot_index, slab });
+    for (self.shuffle.indices.buffer[0..self.shuffle.indices.len]) |index| {
+        if (slot_index == index) std.debug.panic("shuffle vector still contains popped index {d}\n", .{slot_index});
     }
-    log.debug("All slabs full, allocating new slab", .{});
+    const slot = slab.allocSlot(slot_index);
+
+    if (slab.usedSlots() == slab.slot_count) {
+        self.moveSlab(.partial, .full, slab);
+    }
+
+    return slot;
+}
+
+// allocation slow path, need to grab empty slab (if there is one) or initialise a new slab
+// Returns the slice of the allocatted slot, unless the `Slab` is full, in which case `null` is
+// returned.
+fn allocSlotSlow(self: *MeshingPool) ?[]u8 {
+    assert(self.partial_slabs == null);
+    if (self.empty_slabs) |slab| {
+        self.removeFromList(.empty, slab);
+        self.adoptSlabAsCurrent(slab);
+        return self.allocSlot() orelse unreachable;
+    }
+
     // no existing slab has space, allocate a new one
-    var new_slab = Slab.init(self.rng.random(), self.slot_size, params.page_count_max) catch return null;
-    new_slab.next = slab;
-    new_slab.prev = slab.prev;
+    log.debug("All slabs full, getting new slab", .{});
+    var new_slab = Slab.init(self.slot_size, params.slab_page_count_max) catch return null;
+    self.adoptSlabAsCurrent(new_slab);
 
-    new_slab.prev.next = new_slab;
-    slab.prev = new_slab;
-
-    self.first_slab = new_slab;
-    return new_slab.allocSlot() orelse unreachable; // not possible for fresh slab to fail allocating
+    return self.allocSlot() orelse unreachable; // not possible for fresh slab to fail allocating
 }
 
 pub fn freeSlot(self: *MeshingPool, ptr: *anyopaque) void {
-    assert(self.ownsPtr(ptr));
     const slab = self.owningSlab(ptr) orelse unreachable;
-    slab.freeSlot(self.rng.random(), slab.indexOf(ptr));
+    self.freeSlotInSlab(ptr, slab);
+}
+
+pub fn freeSlotInSlab(self: *MeshingPool, ptr: *anyopaque, slab: Slab.Ptr) void {
+    const slot_index = slab.indexOf(ptr);
+    slab.freeSlot(slot_index);
+
+    if (self.partial_slabs) |current| {
+        if (current == slab) {
+            self.shuffle.pushAssumeCapacity(self.rng.random(), @intCast(ShuffleVector.IndexType, slot_index));
+        }
+    }
+
+    const count = slab.usedSlots();
+    if (count == slab.slot_count - 1) {
+        // was a full slab, need to add to partial list
+        log.debug("slab was full", .{});
+        self.moveSlab(.full, .partial, slab);
+    } else if (count == 0) {
+        // going from partial -> empty
+        log.debug("slab became empty", .{});
+        self.moveSlab(.partial, .empty, slab);
+    }
 }
 
 pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?Slab.Ptr {
-    const first = self.first_slab;
-    if (first.ownsPtr(ptr)) return first;
+    if (self.partial_slabs) |first| {
+        if (first.ownsPtr(ptr)) return first;
+        var slab = first.next;
+        while (slab != first) : (slab = slab.next) {
+            if (slab.ownsPtr(ptr)) return slab;
+        }
+    }
 
-    var slab = first.next;
-    while (slab != first) : (slab = slab.next) {
-        if (slab.ownsPtr(ptr)) return slab;
+    if (self.full_slabs) |first| {
+        if (first.ownsPtr(ptr)) return first;
+        var slab = first.next;
+        while (slab != first) : (slab = slab.next) {
+            if (slab.ownsPtr(ptr)) return slab;
+        }
     }
 
     return null;
 }
 
 pub fn ownsPtr(self: MeshingPool, ptr: *anyopaque) bool {
-    const first = self.first_slab;
-    if (first.ownsPtr(ptr)) return true;
-
-    var slab = first.next;
-    while (slab != first) : (slab = slab.next) {
-        if (slab.ownsPtr(ptr)) return true;
-    }
-
-    return false;
+    return self.owningSlab(ptr) != null;
 }
 
-const SlabPage = struct {
-    slab: Slab.Ptr,
-    page: Slab.PageIndex,
-};
-
-fn canMesh(slab_page1: SlabPage, slab_page2: SlabPage) bool {
-    const page1_bitset = slab_page1.slab.bitset(slab_page1.page);
-    const page2_bitset = slab_page2.slab.bitset(slab_page2.page);
-    const bitsize = @bitSizeOf(std.DynamicBitSet.MaskInt);
-    const num_masks = (page1_bitset.bit_length + (bitsize - 1)) / bitsize;
-    for (page1_bitset.masks[0..num_masks]) |mask, i| {
-        if (mask & page2_bitset.masks[i] != 0)
-            return false;
-    }
-    return true;
+fn canMesh(slab1: Slab, slab2: Slab) bool {
+    // TODO: this performs a copy of slab1.bitset, which isn't required
+    return slab1.bitset.intersectWith(slab2.bitset).count() == 0;
 }
 
-/// This function changes the page pointed to by page2 to be page1
-fn meshPages(slab_page1: SlabPage, slab_page2: SlabPage) void {
-    assert(canMesh(slab_page1, slab_page2));
+/// This function changes the slab pointed to by page2 to be page1
+fn meshSlabs(self: *MeshingPool, slab1: Slab.Ptr, slab2: Slab.Ptr) void {
+    assert(canMesh(slab1.*, slab2.*));
 
-    const slab1 = slab_page1.slab;
-    const slab2 = slab_page2.slab;
+    log.debug("meshing slabs {*} and {*}\n", .{ slab1, slab2 });
 
-    const page1_index = slab_page1.page;
-    const page2_index = slab_page2.page;
-
-    const page1 = slab1.dataPage(page1_index);
-    const page2 = slab2.dataPage(page2_index);
-    log.debug("meshPages: {*} and {*}\n", .{ page1, page2 });
-
-    const page1_bitset = slab1.bitset(page1_index);
-    const page2_bitset = slab2.bitset(page2_index);
-
-    var iter = page2_bitset.iterator(.{});
+    var iter = slab2.bitset.iterator(.{});
     while (iter.next()) |slot_index| {
-        const dest = slab1.slot(page1_index, slot_index);
-        const src = slab2.slot(page2_index, slot_index);
-        page1_bitset.set(slot_index);
+        const dest = slab1.slot(slot_index);
+        const src = slab2.slot(slot_index);
+        slab2.bitset.unset(slot_index);
+        slab1.bitset.set(slot_index);
         std.mem.copy(u8, dest, src);
     }
 
-    slab2.freePage(page2_index);
+    // slab1 and slab2 are in the partial list
+    slab2.removeFromList();
 
-    const page_offset = @ptrToInt(page1) - @ptrToInt(slab1);
+    if (slab1.usedSlots() == slab1.slot_count) {
+        self.moveSlab(.partial, .full, slab1);
+    }
 
-    log.debug("remaping {*} to {*}\n", .{ page2, page1 });
+    const slab_size = page_size + @as(usize, slab2.slot_count) * @as(usize, slab2.slot_size);
+    log.debug("remaping address range of size slab_size at {*} to {*}\n", .{ slab2, slab1 });
     _ = std.os.mmap(
-        page2,
-        page_size,
+        @ptrCast([*]u8, slab2),
+        slab_size,
         std.os.PROT.READ | std.os.PROT.WRITE,
         std.os.MAP.FIXED | std.os.MAP.SHARED,
         slab1.fd,
-        page_offset,
+        0,
     ) catch @panic("failed to mesh pages");
 }
 
-fn meshAll(self: *MeshingPool, slab: Slab.Ptr, buf: []u8) void {
-    const num_pages = slab.partial_pages.len() + if (slab.current_index != null) @as(usize, 1) else 0;
-    if (num_pages <= 1) return;
-
-    assert(num_pages <= std.math.maxInt(Slab.SlotIndex));
-    // TODO: cache this in Self so we don't need to do it all the time
-    const random = self.rng.random();
-    const rand_idx = @ptrCast([*]Slab.SlotIndex, buf.ptr);
-    const rand_len = buf.len / @sizeOf(Slab.SlotIndex);
-    assert(rand_len >= 2 * num_pages);
-    var rand_index1 = rand_idx[0..num_pages];
-    var rand_index2 = rand_idx[num_pages .. 2 * num_pages];
-    for (rand_index1[0..num_pages]) |*r, i| {
-        r.* = @intCast(Slab.SlotIndex, i);
-    }
-    random.shuffle(Slab.SlotIndex, rand_index1[0..num_pages]);
-    for (rand_index2[0..num_pages]) |*r, i| {
-        r.* = @intCast(Slab.SlotIndex, i);
-    }
-    random.shuffle(Slab.SlotIndex, rand_index2[0..num_pages]);
-
-    const max_offset = @min(num_pages, 20);
-    var offset_to_random: usize = 0;
-    while (offset_to_random < max_offset) : (offset_to_random += 1) {
-        for (rand_index1[0..num_pages]) |page1_index, i| {
-            const page2_index = rand_index2[(i + offset_to_random) % num_pages];
-            const handle1 = SlabPage{ .slab = slab, .page = page1_index };
-            const handle2 = SlabPage{ .slab = slab, .page = page2_index };
-            if (canMesh(handle1, handle2)) {
-                log.debug("Merging pages {d} and {d}\n", .{ page1_index, page2_index });
-                meshPages(handle1, handle2);
-                return;
+fn splitMesherInner(self: *MeshingPool, list1: []Slab.Ptr, list2: []Slab.Ptr) void {
+    assert(list1.len == list2.len);
+    const len = list1.len;
+    const max_offset = @min(len, 20);
+    var offset: usize = 0;
+    while (offset < max_offset) : (offset += 1) {
+        for (list1) |slab1, i| {
+            const slab2 = list2[(i + offset) % len];
+            if (canMesh(slab1.*, slab2.*)) {
+                self.meshSlabs(slab1, slab2);
+                // BUG/TODO: think about whether we need to remove meshed slabs from the lists,
+                //           or if this will recurisvely mesh pages correctly.
             }
         }
     }
 }
 
-fn usedSlots(self: MeshingPool) usize {
-    return self.first_slab.usedSlots();
+fn splitMesher(self: *MeshingPool, buf: []Slab.Ptr) void {
+    const num_slabs = self.partialSlabCount();
+    if (num_slabs <= 1) return;
+
+    // TODO: cache this in Self so we don't need to do it all the time
+    const random = self.rng.random();
+    assert(buf.len >= num_slabs);
+    const first = self.partial_slabs.?;
+    buf[0] = first;
+
+    var slab = first.next;
+    var slab_index: usize = 1;
+    while (slab != first) {
+        buf[slab_index] = slab;
+        slab_index += 1;
+        slab = slab.next;
+    }
+    random.shuffle(Slab.Ptr, buf[0..slab_index]);
+
+    var slabs1 = buf[0 .. num_slabs / 2];
+    var slabs2 = buf[num_slabs / 2 .. (num_slabs / 2) * 2];
+
+    self.splitMesherInner(slabs1, slabs2);
 }
 
-fn nonEmptyPageCount(self: MeshingPool) usize {
-    return self.first_slab.nonEmptyPageCount();
+fn usedSlots(self: MeshingPool) usize {
+    var count: usize = 0;
+
+    if (self.full_slabs) |first| {
+        var iter = first;
+        while (true) : (iter = iter.next) {
+            count += iter.slot_count;
+            if (iter.next == first) break;
+        }
+    }
+
+    if (self.partial_slabs) |first| {
+        var iter = first;
+        while (true) : (iter = iter.next) {
+            count += iter.usedSlots();
+            if (iter.next == first) break;
+        }
+    }
+
+    return count;
+}
+
+fn partialSlabCount(self: MeshingPool) usize {
+    var count: usize = 0;
+    if (self.partial_slabs) |first| {
+        var iter = first;
+        while (true) : (iter = iter.next) {
+            count += 1;
+            if (iter.next == first) break;
+        }
+    }
+    return count;
+}
+
+fn nonEmptySlabCount(self: MeshingPool) usize {
+    var count = self.partialSlabCount();
+    if (self.full_slabs) |first| {
+        var iter = first;
+        while (true) : (iter = iter.next) {
+            count += 1;
+            if (iter.next == first) break;
+        }
+    }
+    return count;
 }
 
 test "MeshingPool" {
@@ -218,18 +331,18 @@ test "MeshingPool" {
     defer pool.deinit();
 
     const p1 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
     try std.testing.expectEqual(@as(usize, 1), pool.usedSlots());
 
     const p2 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
     try std.testing.expectEqual(@as(usize, 2), pool.usedSlots());
 
     pool.freeSlot(p1.ptr);
     try std.testing.expectEqual(@as(usize, 1), pool.usedSlots());
 
     const p3 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
     try std.testing.expectEqual(@as(usize, 2), pool.usedSlots());
 
     pool.freeSlot(p3.ptr);
@@ -237,73 +350,59 @@ test "MeshingPool" {
     try std.testing.expectEqual(@as(usize, 0), pool.usedSlots());
 }
 
-test "MeshingPool page reclamation" {
+test "MeshingPool slab reclamation" {
     var pool = try MeshingPool.init(16);
     defer pool.deinit();
 
     var i: usize = 0;
-    while (i < page_size / 16) : (i += 1) {
+    while (i < params.slots_per_slab_max) : (i += 1) {
         _ = pool.allocSlot() orelse return error.FailedAlloc;
     }
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
-    try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(@as(usize, params.slots_per_slab_max), pool.usedSlots());
     const p4 = pool.allocSlot() orelse return error.FailedAlloc;
-    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPageCount());
+    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptySlabCount());
     pool.freeSlot(p4.ptr);
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
 }
 
 test "mesh even and odd" {
     var pool = try MeshingPool.init(16);
     defer pool.deinit();
 
-    var pointers: [2 * page_size / 16]?*u128 = .{null} ** (2 * page_size / 16);
+    const slots_per_slab = params.slab_data_size_max / 16;
+    var pointers: [2 * slots_per_slab]?*u128 = .{null} ** (2 * slots_per_slab);
     var i: usize = 0;
-    while (i < 2 * page_size / 16) : (i += 1) {
-        report(pool, &pointers, .before_alloc, i);
-
+    while (i < 2 * slots_per_slab) : (i += 1) {
         const bytes = pool.allocSlot() orelse return error.FailedAlloc;
-        const second_page = i > 255;
-        const index = pool.first_slab.indexOf(bytes.ptr).slot;
-        const pointer_index = if (second_page) @as(usize, index) + 256 else index;
+        const second_slab = i >= slots_per_slab;
+        const index = pool.owningSlab(bytes.ptr).?.indexOf(bytes.ptr);
+        const pointer_index = if (second_slab) index + slots_per_slab else index;
         assert(pointers[pointer_index] == null);
+
         pointers[pointer_index] = @ptrCast(*u128, @alignCast(16, bytes.ptr));
-
-        report(pool, &pointers, .after_alloc, i);
-
         pointers[pointer_index].?.* = @as(u128, pointer_index);
-
-        report(pool, &pointers, .after_write, i);
     }
 
-    log.debug("after writes: first page {d}; second page {d}; pointer[0] ({*}) {d}; pointer[256] ({*}) {d}\n", .{
-        @ptrCast(*u128, @alignCast(16, pool.first_slab.slot(0, 0).ptr)).*,
-        @ptrCast(*u128, @alignCast(16, pool.first_slab.slot(1, 0).ptr)).*,
-        pointers[0],
-        pointers[0].?.*,
-        pointers[256],
-        pointers[256].?.*,
-    });
-
-    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPageCount());
+    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptySlabCount());
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 1), pointers[1].?.*);
     try std.testing.expectEqual(@as(u128, 256), pointers[256].?.*);
     try std.testing.expectEqual(@as(u128, 257), pointers[257].?.*);
 
+    pool.moveSlab(.full, .partial, pool.full_slabs.?);
+    pool.moveSlab(.full, .partial, pool.full_slabs.?);
+    assert(pool.partial_slabs.? != pool.partial_slabs.?.next);
     i = 0;
-    while (i < page_size / 16) : (i += 2) {
-        pool.freeSlot(pool.first_slab.slot(0, i + 1).ptr);
-        pool.freeSlot(pool.first_slab.slot(1, i).ptr);
+    while (i < slots_per_slab - 1) : (i += 2) {
+        pool.freeSlot(pointers[i + 1].?);
+        pool.freeSlot(pointers[i + slots_per_slab].?);
     }
-    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptyPageCount());
-    try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
+    try std.testing.expectEqual(@as(usize, 2), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(@as(usize, slots_per_slab), pool.usedSlots());
 
-    try std.testing.expect(canMesh(
-        .{ .slab = pool.first_slab, .page = 0 },
-        .{ .slab = pool.first_slab, .page = 1 },
-    ));
+    try std.testing.expect(canMesh(pool.partial_slabs.?.*, pool.partial_slabs.?.next.*));
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 2), pointers[2].?.*);
@@ -314,45 +413,20 @@ test "mesh even and odd" {
     try std.testing.expectEqual(@as(u128, 261), pointers[261].?.*);
 
     // waitForInput();
-    var buf: [16]u8 = undefined;
-    pool.meshAll(pool.first_slab, &buf);
+    assert(canMesh(pool.partial_slabs.?.*, pool.partial_slabs.?.next.*));
+    var buf: [2]Slab.Ptr = undefined;
+    pool.splitMesher(&buf);
     // waitForInput();
 
-    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptyPageCount());
-    try std.testing.expectEqual(@as(usize, 256), pool.usedSlots());
+    try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(@as(usize, slots_per_slab), pool.usedSlots());
 
     i = 0;
     while (i < page_size / 16) : (i += 2) {
         try std.testing.expectEqual(@as(u128, i), pointers[i].?.*);
-        try std.testing.expectEqual(@as(u128, i), pointers[i + 256].?.*);
-        try std.testing.expectEqual(@as(u128, i + 1 + 256), pointers[i + 1].?.*);
-        try std.testing.expectEqual(@as(u128, i + 1 + 256), pointers[i + 1 + 256].?.*);
-    }
-}
-
-fn report(
-    pool: MeshingPool,
-    pointers: []?*u128,
-    comptime which: enum { before_alloc, after_alloc, after_write },
-    i: usize,
-) void {
-    const report_at = [_]usize{ 85, 86, 87, 255 };
-    if (std.mem.indexOfScalar(usize, &report_at, i) != null) {
-        log.debug(switch (which) {
-            .before_alloc => "before allocating index {d}\n",
-            .after_alloc => "after allocating index {d}\n",
-            .after_write => "after writing index {d}\n",
-        }, .{i});
-        inline for (.{ 0, 1, 2 }) |index| {
-            if (pointers[index]) |ptr| {
-                log.debug("\tindex {d} (on page {d}) has value {d} (by pointer {d})\n", .{
-                    index,
-                    0,
-                    @ptrCast(*u128, @alignCast(16, pool.first_slab.slot(0, index).ptr)).*,
-                    ptr.*,
-                });
-            }
-        }
+        try std.testing.expectEqual(@as(u128, i), pointers[i + slots_per_slab].?.*);
+        try std.testing.expectEqual(@as(u128, i + 1 + slots_per_slab), pointers[i + 1].?.*);
+        try std.testing.expectEqual(@as(u128, i + 1 + slots_per_slab), pointers[i + 1 + slots_per_slab].?.*);
     }
 }
 
