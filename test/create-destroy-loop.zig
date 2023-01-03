@@ -3,25 +3,28 @@ const build_options = @import("build_options");
 const MeshAlllocator = @import("mesh").MeshAllocator;
 
 pub fn main() !void {
-    var meta_alloc = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = meta_alloc.deinit();
     var mesher = try MeshAlllocator.init(.{});
     defer mesher.deinit();
 
     const allocator = mesher.allocator();
 
+    if (comptime build_options.pauses) {
+        std.debug.print("hit [enter] to enter loop\n", .{});
+        waitForInput();
+    }
+
     inline for (.{ 1, 2, 3, 4 }) |_| {
-        var buf: [50000]*[256]u8 = undefined;
+        var buf: [50000]*[256]u8 = undefined; // pointers to 12 MiB of data
 
         for (buf) |*ptr| {
             const b = try allocator.create([256]u8);
-            b.* = std.mem.zeroes([256]u8);
+            b.* = [1]u8{1} ** 256;
             ptr.* = b;
         }
 
         if (comptime build_options.pauses) {
             std.debug.print("memory allocated\n", .{});
-            std.time.sleep(3 * std.time.ns_per_s);
+            waitForInput();
             std.debug.print("freeing memory\n", .{});
         }
 
@@ -30,7 +33,13 @@ pub fn main() !void {
         }
         if (comptime build_options.pauses) {
             std.debug.print("memory freed\n", .{});
-            std.time.sleep(3 * std.time.ns_per_s);
+            waitForInput();
         }
     }
+}
+
+fn waitForInput() void {
+    const stdin = std.io.getStdIn().reader();
+    var buf: [64]u8 = undefined;
+    _ = stdin.readUntilDelimiter(&buf, '\n') catch return;
 }
