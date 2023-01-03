@@ -28,7 +28,7 @@ const MeshingPool = @This();
 partial_slabs: ?Slab.Ptr,
 empty_slabs: ?Slab.Ptr,
 full_slabs: ?Slab.Ptr,
-slot_size: u16,
+slot_size: usize,
 rng: std.rand.DefaultPrng,
 shuffle: ShuffleVector,
 
@@ -43,7 +43,7 @@ pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
         .partial_slabs = null,
         .empty_slabs = null,
         .full_slabs = null,
-        .slot_size = @intCast(u16, slot_size),
+        .slot_size = slot_size,
         .rng = rng,
         .shuffle = ShuffleVector{ .indices = .{} },
     };

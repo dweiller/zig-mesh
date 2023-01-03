@@ -54,7 +54,7 @@ pub fn init(alignment: usize, page_count: usize) !Span {
     std.os.munmap(trailing_unused_pages);
 
     return Span{
-        .page_count = @intCast(u16, page_count),
+        .page_count = page_count,
         .ptr = aligned,
         .fd = fd,
     };
