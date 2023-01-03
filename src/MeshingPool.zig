@@ -219,15 +219,16 @@ fn meshSlabs(self: *MeshingPool, slab1: Slab.Ptr, slab2: Slab.Ptr) void {
         std.mem.copy(u8, dest, src);
     }
 
+    log.debug("remaping address range of size slab_size at {*} to {*}\n", .{ slab2, slab1 });
+    const slab_size = page_size * slab2.page_count;
     // slab1 and slab2 are in the partial list
     slab2.removeFromList();
+    slab2.deinit();
 
     if (slab1.usedSlots() == slab1.slot_count) {
         self.moveSlab(.partial, .full, slab1);
     }
 
-    const slab_size = page_size + @as(usize, slab2.slot_count) * @as(usize, slab2.slot_size);
-    log.debug("remaping address range of size slab_size at {*} to {*}\n", .{ slab2, slab1 });
     _ = std.os.mmap(
         @ptrCast([*]u8, slab2),
         slab_size,
