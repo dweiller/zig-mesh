@@ -98,16 +98,14 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshAllocator), ctx));
     const alignment = @as(usize, 1) << @intCast(Allocator.Log2Align, log2_ptr_align);
     for (self.size_classes[0..self.num_size_classes]) |size, index| {
-        if (len <= size and alignment + len <= size) {
-            if (maxOffset(size, alignment) + len <= size) {
-                const pool = &self.pools[index];
-                const slot = pool.allocSlot() orelse return null;
-                log.debug(
-                    "allocation of size {d} in pool {d} (slot size {d}) created in slot {d} at address {*}",
-                    .{ len, index, size, pool.owningSlab(slot.ptr).?.indexOf(slot.ptr), slot },
-                );
-                return std.mem.alignPointer(slot.ptr, alignment) orelse unreachable;
-            }
+        if (len <= size and maxOffset(size, alignment) + len <= size) {
+            const pool = &self.pools[index];
+            const slot = pool.allocSlot() orelse return null;
+            log.debug(
+                "allocation of size {d} in pool {d} (slot size {d}) created in slot {d} at address {*}",
+                .{ len, index, size, pool.owningSlab(slot.ptr).?.indexOf(slot.ptr), slot },
+            );
+            return std.mem.alignPointer(slot.ptr, alignment) orelse unreachable;
         }
     }
 
