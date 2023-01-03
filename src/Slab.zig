@@ -29,7 +29,7 @@ const PagePtr = [*]align(page_size) u8;
 const page_size = std.mem.page_size;
 pub const SlotIndex = std.math.IntFittingRange(0, params.slots_per_slab_max - 1);
 
-const assert = @import("mesh.zig").assert;
+const assert = @import("util.zig").assert;
 
 /// `Slab` cannot be copied (and so should be passed by pointer), as this would detach the metadata from allocations
 const Slab = @This();

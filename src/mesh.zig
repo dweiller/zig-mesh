@@ -7,7 +7,7 @@ const MeshingPool = @import("MeshingPool.zig");
 
 const log = std.log.scoped(.MeshAllocator);
 
-pub const assert = std.debug.assert;
+const assert = @import("util.zig").assert;
 
 pub const Config = struct {
     size_classes: []const usize = &.{

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Random = std.rand.Random;
 
-const assert = @import("mesh.zig").assert;
+const assert = @import("util.zig").assert;
 
 pub fn StaticShuffleVector(comptime max_size: comptime_int) type {
     const IndexType = std.math.IntFittingRange(0, max_size);

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const assert = @import("mesh.zig").assert;
+const assert = @import("util.zig").assert;
 
 const page_size = std.mem.page_size;
 // TODO: allow slot sizes larger than the page_size; this would require

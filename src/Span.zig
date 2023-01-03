@@ -14,7 +14,7 @@ const log = std.log.scoped(.Core);
 
 const page_size = std.mem.page_size;
 
-const assert = @import("mesh.zig").assert;
+const assert = @import("util.zig").assert;
 
 const Span = @This();
 

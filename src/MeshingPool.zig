@@ -21,7 +21,7 @@ const page_size = std.mem.page_size;
 
 const log = std.log.scoped(.MeshingPool);
 
-const assert = @import("mesh.zig").assert;
+const assert = @import("util.zig").assert;
 
 const MeshingPool = @This();
 
@@ -430,11 +430,7 @@ test "mesh even and odd" {
     }
 }
 
-fn waitForInput() void {
-    const stdin = std.io.getStdIn().reader();
-    var buf: [64]u8 = undefined;
-    _ = stdin.readUntilDelimiter(&buf, '\n') catch return;
-}
+const waitForInput = @import("util.zig").waitForInput;
 
 // fills a single page, then deinits it `count` times
 pub fn benchmarkMeshingPoolAllocSlot(pool: anytype, count: usize) !void {
