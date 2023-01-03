@@ -50,16 +50,13 @@ pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
 }
 
 pub fn deinit(self: *MeshingPool) void {
-    if (self.partial_slabs) |first| {
-        var slab = first;
-        while (true) {
-            const next = slab.next;
+    inline for (comptime std.meta.tags(List)) |list| {
+        while (@field(self, @tagName(list) ++ "_slabs")) |slab| {
+            self.removeFromList(list, slab);
             slab.deinit();
-            if (next == first) break;
-            slab = next;
         }
-        self.* = undefined;
     }
+    self.* = undefined;
 }
 
 const List = enum { partial, empty, full };
@@ -327,9 +324,11 @@ fn nonEmptySlabCount(self: MeshingPool) usize {
     return count;
 }
 
+const fileDescriptorCount = @import("util.zig").fileDescriptorCount;
+
 test "MeshingPool" {
+    const fd_count = try fileDescriptorCount();
     var pool = try MeshingPool.init(16);
-    defer pool.deinit();
 
     const p1 = pool.allocSlot() orelse return error.FailedAlloc;
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
@@ -349,6 +348,9 @@ test "MeshingPool" {
     pool.freeSlot(p3.ptr);
     pool.freeSlot(p2.ptr);
     try std.testing.expectEqual(@as(usize, 0), pool.usedSlots());
+
+    pool.deinit();
+    try std.testing.expectEqual(fd_count, try fileDescriptorCount());
 }
 
 test "MeshingPool slab reclamation" {

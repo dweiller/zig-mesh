@@ -8,3 +8,13 @@ pub fn waitForInput() void {
     _ = stdin.readUntilDelimiter(&buf, '\n') catch return;
 }
 
+pub fn fileDescriptorCount() !usize {
+    var dir = try std.fs.openIterableDirAbsolute("/proc/self/fd", .{});
+    defer dir.close();
+    var iter = dir.iterateAssumeFirstIteration();
+    var count: usize = 0;
+    while (try iter.next()) |_| {
+        count += 1;
+    }
+    return count;
+}
