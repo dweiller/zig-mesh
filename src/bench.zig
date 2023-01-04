@@ -17,11 +17,13 @@ pub fn main() !void {
         count = try std.fmt.parseInt(usize, arg, 10);
     }
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     switch (comptime benchmark.allocator) {
-        .gpa => try callBenchmark(benchmark.name, benchmark.subname, gpa.allocator()),
+        .gpa => {
+            var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+            try callBenchmark(benchmark.name, benchmark.subname, gpa.allocator());
+        },
         .mesh => {
-            var mesher = try MeshAllocator(.{}).init();
+            var mesher = try MeshAllocator.init(.{});
             try callBenchmark(benchmark.name, benchmark.subname, mesher.allocator());
         },
     }
