@@ -20,6 +20,7 @@ pub const slab_page_count_max = slab_size_max / page_size;
 
 comptime {
     assert(slot_size_max <= std.math.maxInt(u16));
+    assert(2 * page_size < slab_size_max);
 }
 
 pub fn assertSlotSizeValid(slot_size: usize) void {
