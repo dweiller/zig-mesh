@@ -77,11 +77,23 @@ comptime {
 }
 
 pub fn init(slot_size: usize, page_count: usize) !Ptr {
-    params.assertSlotSizeValid(slot_size);
-    params.assertPageCountValid(page_count);
-
     const span = try Span.init(params.slab_alignment, page_count);
-    const slab = @ptrCast(Ptr, @alignCast(params.slab_alignment, span.ptr));
+    return initSpan(slot_size, span) catch unreachable; // cannot fail as span is mapped by Span.init
+}
+
+// can only fail on unmapped spans
+pub fn initSpan(slot_size: usize, span: Span) !Ptr {
+    params.assertSlotSizeValid(slot_size);
+    params.assertPageCountValid(span.page_count);
+
+    const ptr = span.ptr orelse ptr: {
+        var span_mut = span;
+        try span_mut.map(params.slab_alignment);
+        break :ptr span_mut.ptr;
+    };
+    assert(std.mem.isAligned(@ptrToInt(ptr), params.slab_alignment));
+
+    const slab = @ptrCast(Ptr, @alignCast(params.slab_alignment, ptr));
 
     slab.* = Slab{
         .slot_size = slot_size,
@@ -98,12 +110,23 @@ pub fn init(slot_size: usize, page_count: usize) !Ptr {
 
 /// unmap the memory backing a `Slab`
 pub fn deinit(self: Ptr) void {
-    var span = Span{
+    var span = self.backingSpan();
+    span.deinit();
+}
+
+/// unmaps the Slab and returns
+pub fn unmap(self: Ptr) Span {
+    var span = self.backingSpan();
+    span.unmap();
+    return span;
+}
+
+fn backingSpan(self: Ptr) Span {
+    return Span{
         .page_count = self.page_count,
         .ptr = @ptrCast(PagePtr, self),
         .fd = self.fd,
     };
-    span.deinit();
 }
 
 pub fn markUnused(self: Ptr) !void {

@@ -12,6 +12,7 @@ const std = @import("std");
 const params = @import("params.zig");
 
 const Slab = @import("Slab.zig");
+const Span = @import("Span.zig");
 
 const PagePtr = [*]align(page_size) u8;
 const ShuffleVector = @import("shuffle_vector.zig").StaticShuffleVectorUnmanaged(params.slots_per_slab_max);
@@ -27,6 +28,7 @@ const MeshingPool = @This();
 partial_slabs: Slab.List = .{},
 empty_slabs: Slab.List = .{},
 full_slabs: Slab.List = .{},
+span_cache: std.BoundedArray(Span, 16) = .{},
 slot_size: usize,
 rng: std.rand.DefaultPrng,
 shuffle: ShuffleVector,
@@ -52,6 +54,10 @@ pub fn deinit(self: *MeshingPool) void {
             @field(self, field_name).remove(slab);
             slab.deinit();
         }
+    }
+    while (self.span_cache.popOrNull()) |span| {
+        var s = span;
+        s.deinit();
     }
     self.* = undefined;
 }
@@ -118,9 +124,21 @@ fn allocSlotSlow(self: *MeshingPool) ?[]u8 {
         return self.allocSlot() orelse unreachable;
     }
 
-    // no existing slab has space, allocate a new one
-    log.debug("All slabs full, getting new slab", .{});
-    var new_slab = Slab.init(self.slot_size, params.slab_page_count_max) catch return null;
+    // check span cache
+    var new_slab = if (self.span_cache.popOrNull()) |span| new_slab: {
+        log.debug("Reusing unmapped span ({} pages, fd {})", .{ span.page_count, span.fd });
+        break :new_slab Slab.initSpan(self.slot_size, span) catch {
+            log.warn("could not map unmapped span ({} pages, fd {})", .{ span.page_count, span.fd });
+            return null;
+        };
+    } else new_slab: {
+        log.debug("All slabs full, allocating new slab", .{});
+        break :new_slab Slab.init(self.slot_size, params.slab_page_count_max) catch |err| {
+            log.warn("could not allocate new slab: {s}", .{@errorName(err)});
+            return null;
+        };
+    };
+
     self.adoptSlabAsCurrent(new_slab);
 
     return self.allocSlot() orelse unreachable; // not possible for fresh slab to fail allocating
@@ -202,7 +220,8 @@ fn meshSlabs(self: *MeshingPool, slab1: Slab.Ptr, slab2: Slab.Ptr) void {
     const slab_size = page_size * slab2.page_count;
     // slab1 and slab2 are in the partial list
     self.partial_slabs.remove(slab2);
-    slab2.deinit();
+    var slab2_span = slab2.unmap();
+    self.span_cache.append(slab2_span) catch slab2_span.deinit();
 
     if (slab1.usedSlots() == slab1.slot_count) {
         self.moveSlab(.partial, .full, slab1);

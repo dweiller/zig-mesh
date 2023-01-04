@@ -19,24 +19,36 @@ const assert = @import("util.zig").assert;
 const Span = @This();
 
 page_count: usize,
-ptr: [*]align(page_size) u8, // pointer to the mapped memory
+ptr: ?[*]align(page_size) u8, // pointer to the mapped memory or null if not mapped
 fd: std.os.fd_t, // a valid file descriptor is required for remapping addresses
 
 /// Initialise a new span. `page_count` must be at most 16.
 pub fn init(alignment: usize, page_count: usize) !Span {
     assert(alignment >= page_count * page_size);
     const size = page_count * page_size;
-    const oversized = size + alignment - 1;
 
     const fd = try std.os.memfd_create("mesh-span", 0);
     errdefer (std.os.close(fd));
 
     try std.os.ftruncate(fd, @as(u64, size));
 
+    const ptr = try mapFd(alignment, fd, size);
+
+    return Span{
+        .page_count = page_count,
+        .ptr = ptr,
+        .fd = fd,
+    };
+}
+
+fn mapFd(alignment: usize, fd: std.os.fd_t, size: usize) ![*]align(page_size) u8 {
+    const oversized = size + alignment - 1;
+
     const MMAP_PROT_FLAGS = std.os.PROT.READ | std.os.PROT.WRITE;
     const MMAP_MAP_FLAGS = std.os.MAP.SHARED;
 
     const unaligned = try std.os.mmap(null, oversized, MMAP_PROT_FLAGS, std.os.MAP.ANONYMOUS | MMAP_MAP_FLAGS, -1, 0);
+    errdefer std.os.munmap(unaligned);
     const unaligned_address = @ptrToInt(unaligned.ptr);
 
     const aligned_address = std.mem.alignForward(unaligned_address, alignment);
@@ -53,29 +65,37 @@ pub fn init(alignment: usize, page_count: usize) !Span {
 
     std.os.munmap(trailing_unused_pages);
 
-    return Span{
-        .page_count = page_count,
-        .ptr = aligned,
-        .fd = fd,
-    };
+    return aligned;
+}
+
+pub fn map(self: *Span, alignment: usize) !void {
+    if (self.ptr == null) {
+        self.ptr = try mapFd(alignment, self.fd, self.page_count * page_size);
+    }
+}
+
+pub fn unmap(self: *Span) void {
+    if (self.ptr) |ptr| {
+        std.os.munmap(ptr[0 .. @as(usize, self.page_count) * page_size]);
+        self.ptr = null;
+    }
 }
 
 pub fn deinit(self: *Span) void {
-    std.os.munmap(self.ptr[0 .. @as(usize, self.page_count) * page_size]);
+    self.unmap();
     std.os.close(self.fd);
     self.page_count = 0;
-    self.ptr = undefined;
-    self.fd = undefined;
+    self.fd = -1;
 }
 
 test {
     var span = try init(page_size * 16, 16);
     defer span.deinit();
 
-    span.ptr[0] = 5;
-    span.ptr[16 * page_size - 1] = 7;
-    try std.testing.expectEqual(@as(u8, 5), span.ptr[0]);
-    try std.testing.expectEqual(@as(u8, 7), span.ptr[16 * page_size - 1]);
+    span.ptr.?[0] = 5;
+    span.ptr.?[16 * page_size - 1] = 7;
+    try std.testing.expectEqual(@as(u8, 5), span.ptr.?[0]);
+    try std.testing.expectEqual(@as(u8, 7), span.ptr.?[16 * page_size - 1]);
 
-    try std.testing.expect(std.mem.isAligned(@ptrToInt(span.ptr), 1 << 16));
+    try std.testing.expect(std.mem.isAligned(@ptrToInt(span.ptr.?), 1 << 16));
 }
