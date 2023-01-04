@@ -25,9 +25,9 @@ const assert = @import("util.zig").assert;
 
 const MeshingPool = @This();
 
-partial_slabs: ?Slab.Ptr,
-empty_slabs: ?Slab.Ptr,
-full_slabs: ?Slab.Ptr,
+partial_slabs: Slab.List = .{},
+empty_slabs: Slab.List = .{},
+full_slabs: Slab.List = .{},
 slot_size: usize,
 rng: std.rand.DefaultPrng,
 shuffle: ShuffleVector,
@@ -40,9 +40,6 @@ pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
     params.assertSlotSizeValid(slot_size);
     var rng = std.rand.DefaultPrng.init(seed);
     return MeshingPool{
-        .partial_slabs = null,
-        .empty_slabs = null,
-        .full_slabs = null,
         .slot_size = slot_size,
         .rng = rng,
         .shuffle = ShuffleVector{ .indices = .{} },
@@ -51,8 +48,9 @@ pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
 
 pub fn deinit(self: *MeshingPool) void {
     inline for (comptime std.meta.tags(List)) |list| {
-        while (@field(self, @tagName(list) ++ "_slabs")) |slab| {
-            self.removeFromList(list, slab);
+        const field_name = @tagName(list) ++ "_slabs";
+        while (@field(self, field_name).head) |slab| {
+            @field(self, field_name).remove(slab);
             slab.deinit();
         }
     }
@@ -60,41 +58,24 @@ pub fn deinit(self: *MeshingPool) void {
 }
 
 const List = enum { partial, empty, full };
-fn removeFromList(self: *MeshingPool, comptime which: List, slab: Slab.Ptr) void {
-    switch (which) {
-        inline else => |l| {
-            @field(self, @tagName(l) ++ "_slabs") = if (slab.next == slab) null else slab.next;
-            slab.removeFromList();
-        },
-    }
-}
-
-fn appendToList(self: *MeshingPool, comptime which: List, slab: Slab.Ptr) void {
-    switch (which) {
-        inline else => |l| {
-            if (@field(self, @tagName(l) ++ "_slabs")) |list| {
-                list.append(slab);
-            } else {
-                @field(self, @tagName(l) ++ "_slabs") = slab;
-            }
-        },
-    }
-}
-
 fn moveSlab(self: *MeshingPool, comptime from: List, comptime to: List, slab: Slab.Ptr) void {
-    self.removeFromList(from, slab);
-    self.appendToList(to, slab);
+    @field(self, @tagName(from) ++ "_slabs").remove(slab);
+    @field(self, @tagName(to) ++ "_slabs").append(slab);
 }
 
 fn adoptSlab(self: *MeshingPool, slab: Slab.Ptr) void {
-    const list = if (slab.isEmpty()) .empty else if (slab.isFull()) .full else .partial;
-    self.appendToList(list, slab);
+    if (slab.isEmpty())
+        self.empty_slabs.append(slab)
+    else if (slab.isFull())
+        self.full_slabs.append(slab)
+    else
+        self.partial_slabs.append(slab);
 }
 
 fn adoptSlabAsCurrent(self: *MeshingPool, slab: Slab.Ptr) void {
     log.debug("pool {*} adopting slab {*} as its current slab", .{ self, slab });
-    self.appendToList(.partial, slab);
-    self.partial_slabs = slab;
+    self.partial_slabs.append(slab);
+    self.partial_slabs.head = slab;
     self.initShuffleForCurrent();
     // TODO: should we call madvise WILLNEED?
 }
@@ -102,15 +83,15 @@ fn adoptSlabAsCurrent(self: *MeshingPool, slab: Slab.Ptr) void {
 fn initShuffleForCurrent(self: *MeshingPool) void {
     self.shuffle.clear();
     const random = self.rng.random();
-    var iter = self.partial_slabs.?.bitset.iterator(.{ .kind = .unset });
+    var iter = self.partial_slabs.head.?.bitset.iterator(.{ .kind = .unset });
     while (iter.next()) |index| {
-        if (index >= self.partial_slabs.?.slot_count) break;
+        if (index >= self.partial_slabs.head.?.slot_count) break;
         self.shuffle.pushAssumeCapacity(random, @intCast(ShuffleVector.IndexType, index));
     }
 }
 
 pub fn allocSlot(self: *MeshingPool) ?[]u8 {
-    var slab = self.partial_slabs orelse return self.allocSlotSlow();
+    var slab = self.partial_slabs.head orelse return self.allocSlotSlow();
     assert(slab.usedSlots() < slab.slot_count);
 
     const slot_index = self.shuffle.pop();
@@ -131,9 +112,9 @@ pub fn allocSlot(self: *MeshingPool) ?[]u8 {
 // Returns the slice of the allocatted slot, unless the `Slab` is full, in which case `null` is
 // returned.
 fn allocSlotSlow(self: *MeshingPool) ?[]u8 {
-    assert(self.partial_slabs == null);
-    if (self.empty_slabs) |slab| {
-        self.removeFromList(.empty, slab);
+    assert(self.partial_slabs.head == null);
+    if (self.empty_slabs.head) |slab| {
+        self.empty_slabs.remove(slab);
         self.adoptSlabAsCurrent(slab);
         return self.allocSlot() orelse unreachable;
     }
@@ -155,7 +136,7 @@ pub fn freeSlotInSlab(self: *MeshingPool, ptr: *anyopaque, slab: Slab.Ptr) void 
     const slot_index = slab.indexOf(ptr);
     slab.freeSlot(slot_index);
 
-    if (self.partial_slabs) |current| {
+    if (self.partial_slabs.head) |current| {
         if (current == slab) {
             self.shuffle.pushAssumeCapacity(self.rng.random(), @intCast(ShuffleVector.IndexType, slot_index));
         }
@@ -170,12 +151,12 @@ pub fn freeSlotInSlab(self: *MeshingPool, ptr: *anyopaque, slab: Slab.Ptr) void 
         // going from partial -> empty
         log.debug("slab became empty", .{});
         self.moveSlab(.partial, .empty, slab);
-        slab.markUnused() catch |err| log.warn("Could not madvise DONTNEED slab {*}: {s}", .{slab, @errorName(err)});
+        slab.markUnused() catch |err| log.warn("Could not madvise DONTNEED slab {*}: {s}", .{ slab, @errorName(err) });
     }
 }
 
 pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?Slab.Ptr {
-    if (self.partial_slabs) |first| {
+    if (self.partial_slabs.head) |first| {
         if (first.ownsPtr(ptr)) return first;
         var slab = first.next;
         while (slab != first) : (slab = slab.next) {
@@ -183,7 +164,7 @@ pub fn owningSlab(self: MeshingPool, ptr: *anyopaque) ?Slab.Ptr {
         }
     }
 
-    if (self.full_slabs) |first| {
+    if (self.full_slabs.head) |first| {
         if (first.ownsPtr(ptr)) return first;
         var slab = first.next;
         while (slab != first) : (slab = slab.next) {
@@ -221,7 +202,7 @@ fn meshSlabs(self: *MeshingPool, slab1: Slab.Ptr, slab2: Slab.Ptr) void {
     log.debug("remaping address range of size slab_size at {*} to {*}\n", .{ slab2, slab1 });
     const slab_size = page_size * slab2.page_count;
     // slab1 and slab2 are in the partial list
-    slab2.removeFromList();
+    self.partial_slabs.remove(slab2);
     slab2.deinit();
 
     if (slab1.usedSlots() == slab1.slot_count) {
@@ -256,13 +237,13 @@ fn splitMesherInner(self: *MeshingPool, list1: []Slab.Ptr, list2: []Slab.Ptr) vo
 }
 
 fn splitMesher(self: *MeshingPool, buf: []Slab.Ptr) void {
-    const num_slabs = self.partialSlabCount();
+    const num_slabs = self.partial_slabs.len;
     if (num_slabs <= 1) return;
 
     // TODO: cache this in Self so we don't need to do it all the time
     const random = self.rng.random();
     assert(buf.len >= num_slabs);
-    const first = self.partial_slabs.?;
+    const first = self.partial_slabs.head.?;
     buf[0] = first;
 
     var slab = first.next;
@@ -283,7 +264,7 @@ fn splitMesher(self: *MeshingPool, buf: []Slab.Ptr) void {
 fn usedSlots(self: MeshingPool) usize {
     var count: usize = 0;
 
-    if (self.full_slabs) |first| {
+    if (self.full_slabs.head) |first| {
         var iter = first;
         while (true) : (iter = iter.next) {
             count += iter.slot_count;
@@ -291,7 +272,7 @@ fn usedSlots(self: MeshingPool) usize {
         }
     }
 
-    if (self.partial_slabs) |first| {
+    if (self.partial_slabs.head) |first| {
         var iter = first;
         while (true) : (iter = iter.next) {
             count += iter.usedSlots();
@@ -302,9 +283,9 @@ fn usedSlots(self: MeshingPool) usize {
     return count;
 }
 
-fn partialSlabCount(self: MeshingPool) usize {
+fn countSlabs(self: MeshingPool, comptime list: List) usize {
     var count: usize = 0;
-    if (self.partial_slabs) |first| {
+    if (@field(self, @tagName(list) ++ "_slabs").head) |first| {
         var iter = first;
         while (true) : (iter = iter.next) {
             count += 1;
@@ -315,15 +296,7 @@ fn partialSlabCount(self: MeshingPool) usize {
 }
 
 fn nonEmptySlabCount(self: MeshingPool) usize {
-    var count = self.partialSlabCount();
-    if (self.full_slabs) |first| {
-        var iter = first;
-        while (true) : (iter = iter.next) {
-            count += 1;
-            if (iter.next == first) break;
-        }
-    }
-    return count;
+    return self.countSlabs(.partial) + self.countSlabs(.full);
 }
 
 const fileDescriptorCount = @import("util.zig").fileDescriptorCount;
@@ -334,10 +307,12 @@ test "MeshingPool" {
 
     const p1 = pool.allocSlot() orelse return error.FailedAlloc;
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     try std.testing.expectEqual(@as(usize, 1), pool.usedSlots());
 
     const p2 = pool.allocSlot() orelse return error.FailedAlloc;
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     try std.testing.expectEqual(@as(usize, 2), pool.usedSlots());
 
     pool.freeSlot(p1.ptr);
@@ -345,6 +320,7 @@ test "MeshingPool" {
 
     const p3 = pool.allocSlot() orelse return error.FailedAlloc;
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     try std.testing.expectEqual(@as(usize, 2), pool.usedSlots());
 
     pool.freeSlot(p3.ptr);
@@ -364,11 +340,14 @@ test "MeshingPool slab reclamation" {
         _ = pool.allocSlot() orelse return error.FailedAlloc;
     }
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     try std.testing.expectEqual(@as(usize, params.slots_per_slab_max), pool.usedSlots());
     const p4 = pool.allocSlot() orelse return error.FailedAlloc;
     try std.testing.expectEqual(@as(usize, 2), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     pool.freeSlot(p4.ptr);
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
 }
 
 test "mesh even and odd" {
@@ -390,24 +369,26 @@ test "mesh even and odd" {
     }
 
     try std.testing.expectEqual(@as(usize, 2), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 1), pointers[1].?.*);
     try std.testing.expectEqual(@as(u128, 256), pointers[256].?.*);
     try std.testing.expectEqual(@as(u128, 257), pointers[257].?.*);
 
-    pool.moveSlab(.full, .partial, pool.full_slabs.?);
-    pool.moveSlab(.full, .partial, pool.full_slabs.?);
-    assert(pool.partial_slabs.? != pool.partial_slabs.?.next);
+    try std.testing.expectEqual(@as(?Slab.Ptr, null), pool.partial_slabs.head);
+    try std.testing.expectEqual(@as(usize, 2), pool.full_slabs.len);
+    try std.testing.expectEqual(pool.full_slabs.len, pool.countSlabs(.full));
     i = 0;
     while (i < slots_per_slab - 1) : (i += 2) {
         pool.freeSlot(pointers[i + 1].?);
         pool.freeSlot(pointers[i + slots_per_slab].?);
     }
     try std.testing.expectEqual(@as(usize, 2), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     try std.testing.expectEqual(@as(usize, slots_per_slab), pool.usedSlots());
 
-    try std.testing.expect(canMesh(pool.partial_slabs.?.*, pool.partial_slabs.?.next.*));
+    try std.testing.expect(canMesh(pool.partial_slabs.head.?.*, pool.partial_slabs.head.?.next.*));
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 2), pointers[2].?.*);
@@ -418,12 +399,13 @@ test "mesh even and odd" {
     try std.testing.expectEqual(@as(u128, 261), pointers[261].?.*);
 
     // waitForInput();
-    assert(canMesh(pool.partial_slabs.?.*, pool.partial_slabs.?.next.*));
+    assert(canMesh(pool.partial_slabs.head.?.*, pool.partial_slabs.head.?.next.*));
     var buf: [2]Slab.Ptr = undefined;
     pool.splitMesher(&buf);
     // waitForInput();
 
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
+    try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     try std.testing.expectEqual(@as(usize, slots_per_slab), pool.usedSlots());
 
     i = 0;

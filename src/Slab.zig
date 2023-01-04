@@ -36,6 +36,35 @@ const Slab = @This();
 pub const Ptr = *align(params.slab_alignment) Slab;
 pub const ConstPtr = *align(params.slab_alignment) const Slab;
 
+pub const List = struct {
+    head: ?Ptr = null,
+    len: usize = 0,
+
+    pub fn remove(self: *List, slab: Ptr) void {
+        assert(self.len > 0);
+        self.head = if (slab.next == slab) null else slab.next;
+        slab.next.prev = slab.prev;
+        slab.prev.next = slab.next;
+        slab.next = slab;
+        slab.prev = slab;
+        self.len -= 1;
+    }
+
+    pub fn append(self: *List, slab: Ptr) void {
+        assert(slab.next == slab and slab.prev == slab);
+        if (self.head) |head| {
+            head.prev.next = slab;
+            slab.prev = head.prev;
+            slab.next = head;
+            head.prev = slab;
+            self.len += 1;
+        } else {
+            self.head = slab;
+            self.len = 1;
+        }
+    }
+};
+
 slot_size: usize,
 page_count: usize,
 slot_count: usize,
@@ -128,20 +157,6 @@ pub fn isInSlot(self: ConstPtr, ptr: *anyopaque, slot_index: usize) bool {
 
 pub fn usedSlots(self: ConstPtr) usize {
     return self.bitset.count();
-}
-
-pub fn removeFromList(slab: Ptr) void {
-    slab.next.prev = slab.prev;
-    slab.prev.next = slab.next;
-    slab.next = slab;
-    slab.prev = slab;
-}
-
-pub fn append(list: Ptr, slab: Ptr) void {
-    list.prev.next = slab;
-    slab.prev = list.prev;
-    slab.next = list;
-    list.prev = slab;
 }
 
 test {
