@@ -21,7 +21,6 @@ const BitSet = std.StaticBitSet(params.slots_per_slab_max);
 
 const params = @import("params.zig");
 
-const Pool = @import("MeshingPool.zig");
 const Span = @import("Span.zig");
 
 const PagePtr = [*]align(page_size) u8;

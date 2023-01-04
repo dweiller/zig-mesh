@@ -12,7 +12,6 @@ const std = @import("std");
 const params = @import("params.zig");
 
 const Slab = @import("Slab.zig");
-const Span = @import("Span.zig");
 
 const PagePtr = [*]align(page_size) u8;
 const ShuffleVector = @import("shuffle_vector.zig").StaticShuffleVectorUnmanaged(params.slots_per_slab_max);
