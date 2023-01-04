@@ -96,6 +96,7 @@ fn adoptSlabAsCurrent(self: *MeshingPool, slab: Slab.Ptr) void {
     self.appendToList(.partial, slab);
     self.partial_slabs = slab;
     self.initShuffleForCurrent();
+    // TODO: should we call madvise WILLNEED?
 }
 
 fn initShuffleForCurrent(self: *MeshingPool) void {
@@ -169,6 +170,7 @@ pub fn freeSlotInSlab(self: *MeshingPool, ptr: *anyopaque, slab: Slab.Ptr) void 
         // going from partial -> empty
         log.debug("slab became empty", .{});
         self.moveSlab(.partial, .empty, slab);
+        slab.markUnused() catch |err| log.warn("Could not madvise DONTNEED slab {*}: {s}", .{slab, @errorName(err)});
     }
 }
 

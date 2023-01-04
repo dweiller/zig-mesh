@@ -78,6 +78,14 @@ pub fn deinit(self: Ptr) void {
     span.deinit();
 }
 
+pub fn markUnused(self: Ptr) !void {
+    try std.os.madvise(
+        @ptrCast([*]align(page_size) u8, self) + page_size,
+        (self.page_count - 1) * page_size,
+        std.os.MADV.DONTNEED,
+    );
+}
+
 pub fn ownsPtr(self: ConstPtr, ptr: *anyopaque) bool {
     // WARNING: does not check ptr is within the page range given by page_count and data_start
     return @ptrToInt(self) == slabAddress(ptr);
