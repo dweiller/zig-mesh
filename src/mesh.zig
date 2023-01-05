@@ -45,7 +45,7 @@ const LargeAlloc = struct {
 
 const LargeAllocTable = std.AutoHashMapUnmanaged(usize, LargeAlloc);
 
-pub fn init(config: Config) !MeshAllocator {
+pub fn init(config: Config) MeshAllocator {
     assert(std.sort.isSorted(usize, config.size_classes, {}, std.sort.asc(usize)));
     assert(config.size_classes.len < max_num_size_classes);
 
@@ -56,7 +56,7 @@ pub fn init(config: Config) !MeshAllocator {
 
     var pools: [max_num_size_classes]MeshingPool = undefined;
     for (config.size_classes) |size, i| {
-        pools[i] = try MeshingPool.init(size);
+        pools[i] = MeshingPool.init(size);
     }
 
     return MeshAllocator{
@@ -160,7 +160,7 @@ fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
 
 test "each allocation type" {
     const config = Config{};
-    var mesher = try MeshAllocator.init(config);
+    var mesher = MeshAllocator.init(config);
     defer mesher.deinit();
     const a = mesher.allocator();
     for (config.size_classes) |size| {
@@ -208,7 +208,7 @@ test "each allocation type" {
 
 test "create/destroy loop" {
     const config = Config{};
-    var mesher = try MeshAllocator.init(config);
+    var mesher = MeshAllocator.init(config);
     defer mesher.deinit();
     const a = mesher.allocator();
 

@@ -23,7 +23,7 @@ pub fn main() !void {
             try callBenchmark(benchmark.name, benchmark.subname, gpa.allocator());
         },
         .mesh => {
-            var mesher = try MeshAllocator.init(.{});
+            var mesher = MeshAllocator.init(.{});
             try callBenchmark(benchmark.name, benchmark.subname, mesher.allocator());
         },
     }

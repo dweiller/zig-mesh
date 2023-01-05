@@ -33,11 +33,11 @@ slot_size: usize,
 rng: std.rand.DefaultPrng,
 shuffle: ShuffleVector,
 
-pub fn init(slot_size: usize) !MeshingPool {
+pub fn init(slot_size: usize) MeshingPool {
     return initSeeded(slot_size, 0);
 }
 
-pub fn initSeeded(slot_size: usize, seed: u64) !MeshingPool {
+pub fn initSeeded(slot_size: usize, seed: u64) MeshingPool {
     params.assertSlotSizeValid(slot_size);
     var rng = std.rand.DefaultPrng.init(seed);
     return MeshingPool{
@@ -321,7 +321,7 @@ const fileDescriptorCount = @import("util.zig").fileDescriptorCount;
 
 test "MeshingPool" {
     const fd_count = try fileDescriptorCount();
-    var pool = try MeshingPool.init(16);
+    var pool = MeshingPool.init(16);
 
     const p1 = pool.allocSlot() orelse return error.FailedAlloc;
     try std.testing.expectEqual(@as(usize, 1), pool.nonEmptySlabCount());
@@ -350,7 +350,7 @@ test "MeshingPool" {
 }
 
 test "MeshingPool slab reclamation" {
-    var pool = try MeshingPool.init(16);
+    var pool = MeshingPool.init(16);
     defer pool.deinit();
 
     var i: usize = 0;
@@ -369,7 +369,7 @@ test "MeshingPool slab reclamation" {
 }
 
 test "mesh even and odd" {
-    var pool = try MeshingPool.init(16);
+    var pool = MeshingPool.init(16);
     defer pool.deinit();
 
     const slots_per_slab = params.slab_data_size_max / 16;
