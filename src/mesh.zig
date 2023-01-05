@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const MeshingPool = @import("MeshingPool.zig");
+const MeshingPool = @import("MeshingPool.zig").MeshingPool(.{ .debug_checks = false });
 
 const log = std.log.scoped(.MeshAllocator);
 

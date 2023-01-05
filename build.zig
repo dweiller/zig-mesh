@@ -29,7 +29,7 @@ pub fn build(b: *std.build.Builder) void {
     standalone_options.addOption(bool, "pauses", standalone_pauses);
 
     for (standalone_tests) |test_name| {
-        const exe_name = test_name[0..test_name.len - 4];
+        const exe_name = test_name[0 .. test_name.len - 4];
         const test_exe = b.addExecutable(exe_name, b.pathJoin(&.{ "test", test_name }));
         test_exe.setBuildMode(mode);
         test_exe.addPackagePath("mesh", "src/mesh.zig");
