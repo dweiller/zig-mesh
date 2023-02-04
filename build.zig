@@ -5,7 +5,7 @@ const bench = @import("src/bench.zig");
 pub fn build(b: *std.build.Builder) void {
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardReleaseOptions();
+    const mode = b.standardOptimizeOption(.{});
 
     const bench_step = b.step("bench", "Compile the benchmarks");
 
@@ -30,8 +30,11 @@ pub fn build(b: *std.build.Builder) void {
 
     for (standalone_tests) |test_name| {
         const exe_name = test_name[0 .. test_name.len - 4];
-        const test_exe = b.addExecutable(exe_name, b.pathJoin(&.{ "test", test_name }));
-        test_exe.setBuildMode(mode);
+        const test_exe = b.addExecutable(.{
+            .name = exe_name,
+            .root_source_file = .{ .path = b.pathJoin(&.{ "test", test_name }) },
+            .optimize = mode,
+        });
         test_exe.addPackagePath("mesh", "src/mesh.zig");
         test_exe.addPackage(standalone_options.getPackage("build_options"));
         test_exe.override_dest_dir = .{ .custom = "test" };
@@ -40,8 +43,10 @@ pub fn build(b: *std.build.Builder) void {
         standalone_test_step.dependOn(&install_step.step);
     }
 
-    const lib_tests = b.addTest("src/test.zig");
-    lib_tests.setBuildMode(mode);
+    const lib_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/test.zig" },
+        .optimize = mode,
+    });
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&lib_tests.step);
@@ -67,8 +72,11 @@ fn addBenchmark(
     bench_opts.addOption([]const u8, "subname", subname);
     bench_opts.addOption(bench.Alloc, "allocator", alloc);
 
-    const bench_exe = b.addExecutable(step_name, "src/bench.zig");
-    bench_exe.setBuildMode(mode);
+    const bench_exe = b.addExecutable(.{
+        .name = step_name,
+        .root_source_file = .{ .path = "src/bench.zig" },
+        .optimize = mode,
+    });
     bench_exe.addPackage(bench_opts.getPackage("@benchmark"));
     bench_exe.override_dest_dir = .{ .custom = b.pathJoin(&.{ "bench", @tagName(mode), @tagName(alloc) }) };
 
