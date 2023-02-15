@@ -2,7 +2,7 @@ const std = @import("std");
 
 const bench = @import("src/bench.zig");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.Build) void {
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardOptimizeOption(.{});
@@ -35,8 +35,8 @@ pub fn build(b: *std.build.Builder) void {
             .root_source_file = .{ .path = b.pathJoin(&.{ "test", test_name }) },
             .optimize = mode,
         });
-        test_exe.addPackagePath("mesh", "src/mesh.zig");
-        test_exe.addPackage(standalone_options.getPackage("build_options"));
+        test_exe.addAnonymousModule("mesh", .{ .source_file = .{ .path = "src/mesh.zig" } });
+        test_exe.addOptions("build_options", standalone_options);
         test_exe.override_dest_dir = .{ .custom = "test" };
 
         const install_step = b.addInstallArtifact(test_exe);
@@ -77,7 +77,7 @@ fn addBenchmark(
         .root_source_file = .{ .path = "src/bench.zig" },
         .optimize = mode,
     });
-    bench_exe.addPackage(bench_opts.getPackage("@benchmark"));
+    bench_exe.addOptions("@benchmark", bench_opts);
     bench_exe.override_dest_dir = .{ .custom = b.pathJoin(&.{ "bench", @tagName(mode), @tagName(alloc) }) };
 
     _ = b.addInstallArtifact(bench_exe);
