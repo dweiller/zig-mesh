@@ -6,4 +6,8 @@ shift
 echo "comparing allocators in $mode mode"
 
 path="zig-out/bench/$mode"
-hyperfine $@ $(find "$path" -executable -type f)
+basenames=$(find "$path/mesh" -executable -type f -printf '%f\n')
+for basename in $basenames
+do
+    hyperfine $@ "$path/gpa/$basename" "$path/mesh/$basename"
+done
