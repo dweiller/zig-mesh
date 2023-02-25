@@ -101,7 +101,7 @@ pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptim
                         .indices = Buffer{ .len = static.? },
                     };
                     var buf = self.indices.slice();
-                    for (buf) |*index, i| {
+                    for (buf, 0..) |*index, i| {
                         index.* = @intCast(IndexType, i);
                     }
                     random.shuffle(IndexType, buf);
@@ -112,7 +112,7 @@ pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptim
             struct {
                 pub fn init(random: Random, buffer: []IndexType) Self {
                     assert(buffer.len - 1 <= std.math.maxInt(IndexType));
-                    for (buffer) |*index, i| {
+                    for (buffer, 0..) |*index, i| {
                         index.* = @intCast(IndexType, i);
                     }
                     random.shuffle(IndexType, buffer);

@@ -248,9 +248,8 @@ pub fn MeshingPool(comptime config: Config) type {
             assert(list1.len == list2.len);
             const len = list1.len;
             const max_offset = @min(len, 20);
-            var offset: usize = 0;
-            while (offset < max_offset) : (offset += 1) {
-                for (list1) |slab1, i| {
+            for (0..max_offset) |offset| {
+                for (list1, 0..) |slab1, i| {
                     const slab2 = list2[(i + offset) % len];
                     if (canMesh(slab1.*, slab2.*)) {
                         self.meshSlabs(slab1, slab2);

@@ -89,16 +89,14 @@ pub fn benchmarkMultiSize(comptime sizes: []const usize, comptime max_size: usiz
     const s = struct {
         fn f(allocator: Allocator) Allocator.Error!void {
             var pointers: [iterations][sizes.len]*anyopaque = undefined;
-            var i: usize = 0;
-            while (i < iterations) : (i += 1) {
-                inline for (sizes) |size, sz| {
-                    pointers[i][sz] = try allocator.create([size]u8);
+            for (0..iterations) |i| {
+                inline for (&pointers[i], sizes) |*p, size| {
+                    p.* = try allocator.create([size]u8);
                 }
             }
-            i = 0;
-            while (i < iterations) : (i += 1) {
-                inline for (sizes) |size, sz| {
-                    allocator.destroy(@ptrCast(*[size]u8, pointers[i][sz]));
+            for (0..iterations) |i| {
+                inline for (pointers[i], sizes) |p, size| {
+                    allocator.destroy(@ptrCast(*[size]u8, p));
                 }
             }
         }
@@ -126,16 +124,14 @@ pub fn benchmarkMultiSizeTransposedDestroy(
     const s = struct {
         fn f(allocator: Allocator) Allocator.Error!void {
             var pointers: [iterations][sizes.len]*anyopaque = undefined;
-            var i: usize = 0;
-            while (i < iterations) : (i += 1) {
-                inline for (sizes) |size, sz| {
-                    pointers[i][sz] = try allocator.create([size]u8);
+            for (0..iterations) |i| {
+                inline for (&pointers[i], sizes) |*p, size| {
+                    p.* = try allocator.create([size]u8);
                 }
             }
-            i = 0;
-            inline for (sizes) |size, sz| {
-                while (i < iterations) : (i += 1) {
-                    allocator.destroy(@ptrCast(*[size]u8, pointers[i][sz]));
+            inline for (sizes, 0..) |size, sz| {
+                for (pointers) |p| {
+                    allocator.destroy(@ptrCast(*[size]u8, p[sz]));
                 }
             }
         }

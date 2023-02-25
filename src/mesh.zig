@@ -50,13 +50,13 @@ pub fn init(config: Config) MeshAllocator {
     assert(config.size_classes.len < max_num_size_classes);
 
     var size_classes: [max_num_size_classes]u16 = undefined;
-    for (config.size_classes) |size, i| {
-        size_classes[i] = @intCast(u16, size);
+    for (size_classes[0..config.size_classes.len], config.size_classes) |*sc, size| {
+        sc.* = @intCast(u16, size);
     }
 
     var pools: [max_num_size_classes]MeshingPool = undefined;
-    for (config.size_classes) |size, i| {
-        pools[i] = MeshingPool.init(size);
+    for (pools[0..config.size_classes.len], config.size_classes) |*p, size| {
+        p.* = MeshingPool.init(size);
     }
 
     return MeshAllocator{
@@ -73,7 +73,7 @@ pub fn deinit(self: *MeshAllocator) void {
 }
 
 fn sizeClassIndex(self: MeshAllocator, size: usize) usize {
-    for (self.size_classes[0..self.num_size_classes]) |s, i| {
+    for (self.size_classes[0..self.num_size_classes], 0..) |s, i| {
         if (size <= s) return i;
     }
 }
@@ -97,7 +97,7 @@ fn maxOffset(size: usize, alignment: usize) usize {
 fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshAllocator), ctx));
     const alignment = @as(usize, 1) << @intCast(Allocator.Log2Align, log2_ptr_align);
-    for (self.size_classes[0..self.num_size_classes]) |size, index| {
+    for (self.size_classes[0..self.num_size_classes], 0..) |size, index| {
         if (len <= size and maxOffset(size, alignment) + len <= size) {
             const pool = &self.pools[index];
             const slot = pool.allocSlot() orelse return null;
@@ -121,7 +121,7 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
 
 fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshingPool), ctx));
-    for (self.pools[0..self.num_size_classes]) |*pool, index| {
+    for (self.pools[0..self.num_size_classes], 0..) |*pool, index| {
         if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("pool {d} (slot size {d}) owns the allocation to be resized", .{ index, pool.slot_size });
             const slot_index = slab.indexOf(buf.ptr);
@@ -145,7 +145,7 @@ fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_ad
 
 fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
     const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshAllocator), ctx));
-    for (self.pools[0..self.num_size_classes]) |*pool, index| {
+    for (self.pools[0..self.num_size_classes], 0..) |*pool, index| {
         if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("slab at {*} in pool {d} (slot size {d}) owns the pointer to be freed", .{ slab, index, pool.slot_size });
             pool.freeSlotInSlab(buf.ptr, slab);
@@ -212,8 +212,7 @@ test "create/destroy loop" {
     defer mesher.deinit();
     const a = mesher.allocator();
 
-    var i: usize = 0;
-    while (i < 1000) : (i += 1) {
+    for (0..1000) |i| {
         log.debug("iteration {d}", .{i});
         var ptr = try a.create(u32);
         a.destroy(ptr);
