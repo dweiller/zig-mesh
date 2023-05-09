@@ -15,8 +15,9 @@ pub fn build(b: *std.Build) void {
         for (std.meta.tags(bench.Alloc)) |alloc| {
             inline for (std.meta.fields(@TypeOf(@field(bench.benchmarks, field.name)))) |sub_field| {
                 const bench_exe = addBenchmark(b, field.name, sub_field.name, mode, alloc);
+                const bench_install = b.addInstallArtifact(bench_exe);
                 if (alloc == bench_allocator) {
-                    bench_step.dependOn(&bench_exe.install_step.?.step);
+                    bench_step.dependOn(&bench_install.step);
                 }
             }
         }
@@ -64,7 +65,7 @@ fn addBenchmark(
     comptime subname: []const u8,
     mode: std.builtin.Mode,
     alloc: bench.Alloc,
-) *std.build.LibExeObjStep {
+) *std.build.Step.Compile {
     const step_name = std.fmt.comptimePrint("bench-{s}-{s}", .{ name, subname });
 
     const bench_opts = b.addOptions();
@@ -80,6 +81,5 @@ fn addBenchmark(
     bench_exe.addOptions("@benchmark", bench_opts);
     bench_exe.override_dest_dir = .{ .custom = b.pathJoin(&.{ "bench", @tagName(mode), @tagName(alloc) }) };
 
-    _ = b.addInstallArtifact(bench_exe);
     return bench_exe;
 }
