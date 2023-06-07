@@ -3,7 +3,7 @@ const build_options = @import("build_options");
 const MeshAlllocator = @import("mesh").MeshAllocator;
 
 pub fn main() !void {
-    var mesher = try MeshAlllocator.init(.{});
+    var mesher = MeshAlllocator.init(.{});
     defer mesher.deinit();
 
     const allocator = mesher.allocator();
