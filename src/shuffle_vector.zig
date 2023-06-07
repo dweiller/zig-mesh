@@ -69,11 +69,11 @@ pub fn ShuffleVectorGeneric(comptime T: type, comptime static: ?comptime_int) ty
             return self.unmanaged.pop();
         }
 
-        pub fn peek(self: Self) ?T {
+        pub fn peek(self: *const Self) ?T {
             return self.unmanaged.peek();
         }
 
-        pub fn count(self: Self) usize {
+        pub fn count(self: *const Self) usize {
             return self.unmanaged.count();
         }
     };
@@ -151,12 +151,12 @@ pub fn ShuffleVectorUnmanagedGeneric(comptime T: type, comptime static: ?comptim
             return self.indices.pop();
         }
 
-        pub fn peek(self: Self) ?T {
+        pub fn peek(self: *const Self) ?T {
             if (self.count() == 0) return null;
             return self.indices.buffer[self.count() - 1];
         }
 
-        pub inline fn count(self: Self) usize {
+        pub inline fn count(self: *const Self) usize {
             return if (static == null) self.indices.buffer.len else self.indices.len;
         }
     };

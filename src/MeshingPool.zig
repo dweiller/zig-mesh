@@ -179,7 +179,7 @@ pub fn MeshingPool(comptime config: Config) type {
             }
         }
 
-        pub fn owningSlab(self: Pool, ptr: *anyopaque) ?Slab.Ptr {
+        pub fn owningSlab(self: *const Pool, ptr: *anyopaque) ?Slab.Ptr {
             if (self.partial_slabs.head) |first| {
                 if (first.ownsPtr(ptr)) return first;
                 var slab = first.next;
@@ -199,18 +199,18 @@ pub fn MeshingPool(comptime config: Config) type {
             return null;
         }
 
-        pub fn ownsPtr(self: Pool, ptr: *anyopaque) bool {
+        pub fn ownsPtr(self: *const Pool, ptr: *anyopaque) bool {
             return self.owningSlab(ptr) != null;
         }
 
-        fn canMesh(slab1: Slab, slab2: Slab) bool {
+        fn canMesh(slab1: Slab.ConstPtr, slab2: Slab.ConstPtr) bool {
             // TODO: this performs a copy of slab1.bitset, which isn't required
             return slab1.bitset.intersectWith(slab2.bitset).count() == 0;
         }
 
         /// This function changes the slab pointed to by page2 to be page1
         fn meshSlabs(self: *Pool, slab1: Slab.Ptr, slab2: Slab.Ptr) void {
-            assert(canMesh(slab1.*, slab2.*));
+            assert(canMesh(slab1, slab2));
 
             log.debug("meshing slabs {*} and {*}\n", .{ slab1, slab2 });
 
@@ -251,7 +251,7 @@ pub fn MeshingPool(comptime config: Config) type {
             for (0..max_offset) |offset| {
                 for (list1, 0..) |slab1, i| {
                     const slab2 = list2[(i + offset) % len];
-                    if (canMesh(slab1.*, slab2.*)) {
+                    if (canMesh(slab1, slab2)) {
                         self.meshSlabs(slab1, slab2);
                         // BUG/TODO: think about whether we need to remove meshed slabs from the lists,
                         //           or if this will recurisvely mesh pages correctly.
@@ -285,7 +285,7 @@ pub fn MeshingPool(comptime config: Config) type {
             self.splitMesherInner(slabs1, slabs2);
         }
 
-        fn usedSlots(self: Pool) usize {
+        fn usedSlots(self: *const Pool) usize {
             var count: usize = 0;
 
             if (self.full_slabs.head) |first| {
@@ -307,7 +307,7 @@ pub fn MeshingPool(comptime config: Config) type {
             return count;
         }
 
-        fn countSlabs(self: Pool, comptime list: List) usize {
+        fn countSlabs(self: *const Pool, comptime list: List) usize {
             var count: usize = 0;
             if (@field(self, @tagName(list) ++ "_slabs").head) |first| {
                 var iter = first;
@@ -319,7 +319,7 @@ pub fn MeshingPool(comptime config: Config) type {
             return count;
         }
 
-        fn nonEmptySlabCount(self: Pool) usize {
+        fn nonEmptySlabCount(self: *const Pool) usize {
             return self.countSlabs(.partial) + self.countSlabs(.full);
         }
     };
@@ -415,7 +415,7 @@ test "mesh even and odd" {
     try std.testing.expectEqual(pool.nonEmptySlabCount(), pool.partial_slabs.len + pool.full_slabs.len);
     try std.testing.expectEqual(@as(usize, slots_per_slab), pool.usedSlots());
 
-    try std.testing.expect(TestMesher.canMesh(pool.partial_slabs.head.?.*, pool.partial_slabs.head.?.next.*));
+    try std.testing.expect(TestMesher.canMesh(pool.partial_slabs.head.?, pool.partial_slabs.head.?.next));
 
     try std.testing.expectEqual(@as(u128, 0), pointers[0].?.*);
     try std.testing.expectEqual(@as(u128, 2), pointers[2].?.*);
@@ -426,7 +426,7 @@ test "mesh even and odd" {
     try std.testing.expectEqual(@as(u128, 261), pointers[261].?.*);
 
     // waitForInput();
-    assert(TestMesher.canMesh(pool.partial_slabs.head.?.*, pool.partial_slabs.head.?.next.*));
+    assert(TestMesher.canMesh(pool.partial_slabs.head.?, pool.partial_slabs.head.?.next));
     var buf: [2]Slab.Ptr = undefined;
     pool.splitMesher(&buf);
     // waitForInput();
