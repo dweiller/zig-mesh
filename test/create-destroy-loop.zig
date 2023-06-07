@@ -16,7 +16,7 @@ pub fn main() !void {
     inline for (.{ 1, 2, 3, 4 }) |_| {
         var buf: [50000]*[256]u8 = undefined; // pointers to 12 MiB of data
 
-        for (buf) |*ptr| {
+        for (&buf) |*ptr| {
             const b = try allocator.create([256]u8);
             b.* = [1]u8{1} ** 256;
             ptr.* = b;
