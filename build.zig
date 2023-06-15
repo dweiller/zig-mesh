@@ -5,6 +5,10 @@ const bench = @import("src/bench.zig");
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
+    const mesh = b.addModule("mesh", .{
+        .source_file = .{ .path = "src/mesh.zig" },
+    });
+
     const bench_step = b.step("bench", "Compile the benchmarks");
 
     const bench_allocator = b.option(bench.Alloc, "allocator", "The allocator to benchmark; defaults to mesh") orelse .mesh;
@@ -34,7 +38,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = .{ .path = b.pathJoin(&.{ "test", test_name }) },
             .optimize = optimize,
         });
-        test_exe.addAnonymousModule("mesh", .{ .source_file = .{ .path = "src/mesh.zig" } });
+        test_exe.addModule("mesh", mesh);
         test_exe.addOptions("build_options", standalone_options);
         test_exe.override_dest_dir = .{ .custom = "test" };
 
