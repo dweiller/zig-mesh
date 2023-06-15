@@ -1,9 +1,9 @@
 const std = @import("std");
 const build_options = @import("build_options");
-const MeshAllocator = @import("mesh").MeshAllocator;
+const mesh = @import("mesh");
 
 pub fn main() !void {
-    var mesher = MeshAllocator.init(.{});
+    var mesher = mesh.Allocator.init(.{});
     defer mesher.deinit();
 
     const allocator = mesher.allocator();

@@ -1,7 +1,6 @@
 // TODO: first make a mesh allocator for a fixed slot size, i.e. a pool/object allocator that does meshing
 //       Then reuse that code to make a GPA that has mesh allocators for different sizes
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const MeshingPool = @import("MeshingPool.zig").MeshingPool(.{ .debug_checks = false });
 
@@ -32,7 +31,7 @@ pub const Config = struct {
 
 const max_num_size_classes = 32;
 
-pub const MeshAllocator = @This();
+pub const Allocator = @This();
 
 num_size_classes: usize,
 size_classes: [max_num_size_classes]u16,
@@ -45,7 +44,7 @@ const LargeAlloc = struct {
 
 const LargeAllocTable = std.AutoHashMapUnmanaged(usize, LargeAlloc);
 
-pub fn init(config: Config) MeshAllocator {
+pub fn init(config: Config) Allocator {
     assert(std.sort.isSorted(usize, config.size_classes, {}, std.sort.asc(usize)));
     assert(config.size_classes.len < max_num_size_classes);
 
@@ -59,26 +58,26 @@ pub fn init(config: Config) MeshAllocator {
         p.* = MeshingPool.init(size);
     }
 
-    return MeshAllocator{
+    return Allocator{
         .num_size_classes = config.size_classes.len,
         .size_classes = size_classes,
         .pools = pools,
     };
 }
 
-pub fn deinit(self: *MeshAllocator) void {
+pub fn deinit(self: *Allocator) void {
     for (self.pools[0..self.num_size_classes]) |*pool| {
         pool.deinit();
     }
 }
 
-fn sizeClassIndex(self: MeshAllocator, size: usize) usize {
+fn sizeClassIndex(self: Allocator, size: usize) usize {
     for (self.size_classes[0..self.num_size_classes], 0..) |s, i| {
         if (size <= s) return i;
     }
 }
 
-pub fn allocator(self: *MeshAllocator) Allocator {
+pub fn allocator(self: *Allocator) std.mem.Allocator {
     return .{
         .ptr = self,
         .vtable = &.{
@@ -95,8 +94,8 @@ fn maxOffset(size: usize, alignment: usize) usize {
 }
 
 fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
-    const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshAllocator), ctx));
-    const alignment = @as(usize, 1) << @intCast(Allocator.Log2Align, log2_ptr_align);
+    const self = @ptrCast(*Allocator, @alignCast(@alignOf(Allocator), ctx));
+    const alignment = @as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align);
     for (self.size_classes[0..self.num_size_classes], 0..) |size, index| {
         if (len <= size and maxOffset(size, alignment) + len <= size) {
             const pool = &self.pools[index];
@@ -120,7 +119,7 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
 }
 
 fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
-    const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshingPool), ctx));
+    const self = @ptrCast(*Allocator, @alignCast(@alignOf(MeshingPool), ctx));
     for (self.pools[0..self.num_size_classes], 0..) |*pool, index| {
         if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("pool {d} (slot size {d}) owns the allocation to be resized", .{ index, pool.slot_size });
@@ -144,7 +143,7 @@ fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_ad
 }
 
 fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
-    const self = @ptrCast(*MeshAllocator, @alignCast(@alignOf(MeshAllocator), ctx));
+    const self = @ptrCast(*Allocator, @alignCast(@alignOf(Allocator), ctx));
     for (self.pools[0..self.num_size_classes], 0..) |*pool, index| {
         if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("slab at {*} in pool {d} (slot size {d}) owns the pointer to be freed", .{ slab, index, pool.slot_size });
@@ -160,7 +159,7 @@ fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
 
 test "each allocation type" {
     const config = Config{};
-    var mesher = MeshAllocator.init(config);
+    var mesher = Allocator.init(config);
     defer mesher.deinit();
     const a = mesher.allocator();
     for (config.size_classes) |size| {
@@ -208,7 +207,7 @@ test "each allocation type" {
 
 test "create/destroy loop" {
     const config = Config{};
-    var mesher = MeshAllocator.init(config);
+    var mesher = Allocator.init(config);
     defer mesher.deinit();
     const a = mesher.allocator();
 

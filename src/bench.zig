@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const MeshAllocator = @import("mesh.zig").MeshAllocator;
+const MeshAllocator = @import("mesh.zig").Allocator;
 
 const benchmark = @import("@benchmark");
 
