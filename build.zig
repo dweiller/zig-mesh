@@ -3,9 +3,7 @@ const std = @import("std");
 const bench = @import("src/bench.zig");
 
 pub fn build(b: *std.Build) void {
-    // Standard release options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardOptimizeOption(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
     const bench_step = b.step("bench", "Compile the benchmarks");
 
@@ -14,7 +12,7 @@ pub fn build(b: *std.Build) void {
     inline for (std.meta.fields(@TypeOf(bench.benchmarks))) |field| {
         for (std.meta.tags(bench.Alloc)) |alloc| {
             inline for (std.meta.fields(@TypeOf(@field(bench.benchmarks, field.name)))) |sub_field| {
-                const bench_exe = addBenchmark(b, field.name, sub_field.name, mode, alloc);
+                const bench_exe = addBenchmark(b, field.name, sub_field.name, optimize, alloc);
                 const bench_install = b.addInstallArtifact(bench_exe);
                 if (alloc == bench_allocator) {
                     bench_step.dependOn(&bench_install.step);
@@ -34,7 +32,7 @@ pub fn build(b: *std.Build) void {
         const test_exe = b.addExecutable(.{
             .name = exe_name,
             .root_source_file = .{ .path = b.pathJoin(&.{ "test", test_name }) },
-            .optimize = mode,
+            .optimize = optimize,
         });
         test_exe.addAnonymousModule("mesh", .{ .source_file = .{ .path = "src/mesh.zig" } });
         test_exe.addOptions("build_options", standalone_options);
@@ -46,7 +44,7 @@ pub fn build(b: *std.Build) void {
 
     const lib_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/test.zig" },
-        .optimize = mode,
+        .optimize = optimize,
     });
 
     const test_step = b.step("test", "Run library tests");
@@ -63,7 +61,7 @@ fn addBenchmark(
     b: *std.build.Builder,
     comptime name: []const u8,
     comptime subname: []const u8,
-    mode: std.builtin.Mode,
+    optimize: std.builtin.Mode,
     alloc: bench.Alloc,
 ) *std.build.Step.Compile {
     const step_name = std.fmt.comptimePrint("bench-{s}-{s}", .{ name, subname });
@@ -76,10 +74,10 @@ fn addBenchmark(
     const bench_exe = b.addExecutable(.{
         .name = step_name,
         .root_source_file = .{ .path = "src/bench.zig" },
-        .optimize = mode,
+        .optimize = optimize,
     });
     bench_exe.addOptions("@benchmark", bench_opts);
-    bench_exe.override_dest_dir = .{ .custom = b.pathJoin(&.{ "bench", @tagName(mode), @tagName(alloc) }) };
+    bench_exe.override_dest_dir = .{ .custom = b.pathJoin(&.{ "bench", @tagName(optimize), @tagName(alloc) }) };
 
     return bench_exe;
 }
