@@ -96,7 +96,7 @@ pub fn MeshingPool(comptime config: Config) type {
             var iter = self.partial_slabs.head.?.bitset.iterator(.{ .kind = .unset });
             while (iter.next()) |index| {
                 if (index >= self.partial_slabs.head.?.slot_count) break;
-                self.shuffle.pushAssumeCapacity(random, @intCast(ShuffleVector.IndexType, index));
+                self.shuffle.pushAssumeCapacity(random, @intCast(index));
             }
         }
 
@@ -162,7 +162,7 @@ pub fn MeshingPool(comptime config: Config) type {
 
             if (self.partial_slabs.head) |current| {
                 if (current == slab) {
-                    self.shuffle.pushAssumeCapacity(self.rng.random(), @intCast(ShuffleVector.IndexType, slot_index));
+                    self.shuffle.pushAssumeCapacity(self.rng.random(), @intCast(slot_index));
                 }
             }
 
@@ -235,7 +235,7 @@ pub fn MeshingPool(comptime config: Config) type {
             }
 
             _ = std.os.mmap(
-                @ptrCast([*]u8, slab2),
+                @ptrCast(slab2),
                 slab_size,
                 std.os.PROT.READ | std.os.PROT.WRITE,
                 std.os.MAP.FIXED | std.os.MAP.SHARED,
@@ -391,8 +391,8 @@ test "mesh even and odd" {
         const pointer_index = if (second_slab) index + slots_per_slab else index;
         assert(pointers[pointer_index] == null);
 
-        pointers[pointer_index] = @ptrCast(*u128, @alignCast(16, bytes.ptr));
-        pointers[pointer_index].?.* = @as(u128, pointer_index);
+        pointers[pointer_index] = @ptrCast(@alignCast(bytes.ptr));
+        pointers[pointer_index].?.* = pointer_index;
     }
 
     try std.testing.expectEqual(@as(usize, 2), pool.nonEmptySlabCount());

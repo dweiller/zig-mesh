@@ -49,14 +49,14 @@ fn mapFd(alignment: usize, fd: std.os.fd_t, size: usize) ![*]align(page_size) u8
 
     const unaligned = try std.os.mmap(null, oversized, MMAP_PROT_FLAGS, std.os.MAP.ANONYMOUS | MMAP_MAP_FLAGS, -1, 0);
     errdefer std.os.munmap(unaligned);
-    const unaligned_address = @ptrToInt(unaligned.ptr);
+    const unaligned_address = @intFromPtr(unaligned.ptr);
 
-    const aligned_address = std.mem.alignForward(unaligned_address, alignment);
-    const aligned = @intToPtr([*]align(page_size) u8, aligned_address);
+    const aligned_address = std.mem.alignForward(usize, unaligned_address, alignment);
+    const aligned: [*]align(page_size) u8 = @ptrFromInt(aligned_address);
 
     const align_offset = aligned_address - unaligned_address;
     const initial_unused_pages = unaligned[0..align_offset];
-    const trailing_unused_pages = @alignCast(page_size, aligned[size .. oversized - align_offset]);
+    const trailing_unused_pages: []align(page_size) u8 = @alignCast(aligned[size .. oversized - align_offset]);
 
     _ = try std.os.mmap(aligned, size, MMAP_PROT_FLAGS, std.os.MAP.FIXED | MMAP_MAP_FLAGS, fd, 0);
 
@@ -97,5 +97,5 @@ test {
     try std.testing.expectEqual(@as(u8, 5), span.ptr.?[0]);
     try std.testing.expectEqual(@as(u8, 7), span.ptr.?[16 * page_size - 1]);
 
-    try std.testing.expect(std.mem.isAligned(@ptrToInt(span.ptr.?), 1 << 16));
+    try std.testing.expect(std.mem.isAligned(@intFromPtr(span.ptr.?), 1 << 16));
 }

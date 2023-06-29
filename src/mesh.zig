@@ -50,7 +50,7 @@ pub fn init(config: Config) Allocator {
 
     var size_classes: [max_num_size_classes]u16 = undefined;
     for (size_classes[0..config.size_classes.len], config.size_classes) |*sc, size| {
-        sc.* = @intCast(u16, size);
+        sc.* = @intCast(size);
     }
 
     var pools: [max_num_size_classes]MeshingPool = undefined;
@@ -94,8 +94,8 @@ fn maxOffset(size: usize, alignment: usize) usize {
 }
 
 fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
-    const self = @ptrCast(*Allocator, @alignCast(@alignOf(Allocator), ctx));
-    const alignment = @as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align);
+    const self: *Allocator = @ptrCast(@alignCast(ctx));
+    const alignment = @as(usize, 1) << @as(std.mem.Allocator.Log2Align, @intCast(log2_ptr_align));
     for (self.size_classes[0..self.num_size_classes], 0..) |size, index| {
         if (len <= size and maxOffset(size, alignment) + len <= size) {
             const pool = &self.pools[index];
@@ -111,7 +111,7 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
     self.large_allocations.ensureUnusedCapacity(std.heap.page_allocator, 1) catch return null;
     if (std.heap.page_allocator.rawAlloc(len, log2_ptr_align, ret_addr)) |ptr| {
         log.debug("creating large allocation of size {d} at {*}", .{ len, ptr });
-        self.large_allocations.putAssumeCapacity(@ptrToInt(ptr), .{ .bytes = ptr[0..len] });
+        self.large_allocations.putAssumeCapacity(@intFromPtr(ptr), .{ .bytes = ptr[0..len] });
         return ptr;
     } else {
         return null;
@@ -119,7 +119,7 @@ fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u
 }
 
 fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
-    const self = @ptrCast(*Allocator, @alignCast(@alignOf(MeshingPool), ctx));
+    const self: *Allocator = @ptrCast(@alignCast(ctx));
     for (self.pools[0..self.num_size_classes], 0..) |*pool, index| {
         if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("pool {d} (slot size {d}) owns the allocation to be resized", .{ index, pool.slot_size });
@@ -130,7 +130,7 @@ fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_ad
     }
     // must be a large allocation
     log.debug("resizing large allocation at {*}", .{buf.ptr});
-    const entry = self.large_allocations.getEntry(@ptrToInt(buf.ptr)) orelse unreachable;
+    const entry = self.large_allocations.getEntry(@intFromPtr(buf.ptr)) orelse unreachable;
     if (std.heap.page_allocator.rawResize(
         buf,
         log2_buf_align,
@@ -143,7 +143,7 @@ fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_ad
 }
 
 fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
-    const self = @ptrCast(*Allocator, @alignCast(@alignOf(Allocator), ctx));
+    const self: *Allocator = @ptrCast(@alignCast(ctx));
     for (self.pools[0..self.num_size_classes], 0..) |*pool, index| {
         if (pool.owningSlab(buf.ptr)) |slab| {
             log.debug("slab at {*} in pool {d} (slot size {d}) owns the pointer to be freed", .{ slab, index, pool.slot_size });
@@ -154,7 +154,7 @@ fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
     // must be a large allocation
     log.debug("freeing large allocation at {*}", .{buf.ptr});
     std.heap.page_allocator.rawFree(buf, log2_buf_align, ret_addr);
-    assert(self.large_allocations.remove(@ptrToInt(buf.ptr)));
+    assert(self.large_allocations.remove(@intFromPtr(buf.ptr)));
 }
 
 test "each allocation type" {

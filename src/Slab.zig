@@ -91,9 +91,9 @@ pub fn initSpan(slot_size: usize, span: Span) !Ptr {
         try span_mut.map(params.slab_alignment);
         break :ptr span_mut.ptr;
     };
-    assert(std.mem.isAligned(@ptrToInt(ptr), params.slab_alignment));
+    assert(std.mem.isAligned(@intFromPtr(ptr), params.slab_alignment));
 
-    const slab = @ptrCast(Ptr, @alignCast(params.slab_alignment, ptr));
+    const slab: Ptr = @ptrCast(@alignCast(ptr));
 
     slab.* = Slab{
         .slot_size = slot_size,
@@ -124,14 +124,14 @@ pub fn unmap(self: Ptr) Span {
 fn backingSpan(self: Ptr) Span {
     return Span{
         .page_count = self.page_count,
-        .ptr = @ptrCast(PagePtr, self),
+        .ptr = @ptrCast(self),
         .fd = self.fd,
     };
 }
 
 pub fn markUnused(self: Ptr) !void {
     try std.os.madvise(
-        @ptrCast([*]align(page_size) u8, self) + page_size,
+        @as([*]align(page_size) u8, @ptrCast(self)) + page_size,
         (self.page_count - 1) * page_size,
         std.os.MADV.DONTNEED,
     );
@@ -139,11 +139,11 @@ pub fn markUnused(self: Ptr) !void {
 
 pub fn ownsPtr(self: ConstPtr, ptr: *anyopaque) bool {
     // WARNING: does not check ptr is within the page range given by page_count and data_start
-    return @ptrToInt(self) == slabAddress(ptr);
+    return @intFromPtr(self) == slabAddress(ptr);
 }
 
 pub fn slabAddress(ptr: *anyopaque) usize {
-    return std.mem.alignBackward(@ptrToInt(ptr), params.slab_alignment);
+    return std.mem.alignBackward(usize, @intFromPtr(ptr), params.slab_alignment);
 }
 
 pub fn allocSlot(self: Ptr, slot_index: usize) []u8 {
@@ -158,13 +158,13 @@ pub fn freeSlot(self: Ptr, slot_index: usize) void {
 }
 
 pub fn slot(self: Ptr, slot_index: usize) []u8 {
-    const ptr = @ptrCast([*]u8, self) + (page_size + slot_index * self.slot_size);
+    const ptr = @as([*]u8, @ptrCast(self)) + (page_size + slot_index * self.slot_size);
     return ptr[0..self.slot_size];
 }
 
 fn slotOffset(self: ConstPtr, ptr: *anyopaque) usize {
-    const addr = @ptrToInt(ptr);
-    const offset = addr - (@ptrToInt(self) + page_size);
+    const addr = @intFromPtr(ptr);
+    const offset = addr - (@intFromPtr(self) + page_size);
     return offset;
 }
 pub fn indexOf(self: ConstPtr, ptr: *anyopaque) usize {

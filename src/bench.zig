@@ -96,7 +96,7 @@ pub fn benchmarkMultiSize(comptime sizes: []const usize, comptime max_size: usiz
             }
             for (0..iterations) |i| {
                 inline for (pointers[i], sizes) |p, size| {
-                    allocator.destroy(@ptrCast(*[size]u8, p));
+                    allocator.destroy(@as(*[size]u8, @ptrCast(p)));
                 }
             }
         }
@@ -131,7 +131,7 @@ pub fn benchmarkMultiSizeTransposedDestroy(
             }
             inline for (sizes, 0..) |size, sz| {
                 for (pointers) |p| {
-                    allocator.destroy(@ptrCast(*[size]u8, p[sz]));
+                    allocator.destroy(@as(*[size]u8, @ptrCast(p[sz])));
                 }
             }
         }
