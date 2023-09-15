@@ -17,7 +17,11 @@ pub fn build(b: *std.Build) void {
         for (std.meta.tags(bench.Alloc)) |alloc| {
             inline for (std.meta.fields(@TypeOf(@field(bench.benchmarks, field.name)))) |sub_field| {
                 const bench_exe = addBenchmark(b, field.name, sub_field.name, optimize, alloc);
-                const bench_install = b.addInstallArtifact(bench_exe);
+                const bench_install = b.addInstallArtifact(bench_exe, .{ .dest_dir = .{
+                    .override = .{
+                        .custom = b.pathJoin(&.{ "bench", @tagName(optimize), @tagName(alloc) }),
+                    },
+                } });
                 if (alloc == bench_allocator) {
                     bench_step.dependOn(&bench_install.step);
                 }
@@ -40,9 +44,10 @@ pub fn build(b: *std.Build) void {
         });
         test_exe.addModule("mesh", mesh);
         test_exe.addOptions("build_options", standalone_options);
-        test_exe.override_dest_dir = .{ .custom = "test" };
 
-        const install_step = b.addInstallArtifact(test_exe);
+        const install_step = b.addInstallArtifact(test_exe, .{
+            .dest_dir = .{ .override = .{ .custom = "test" } },
+        });
         standalone_test_step.dependOn(&install_step.step);
     }
 
@@ -81,7 +86,6 @@ fn addBenchmark(
         .optimize = optimize,
     });
     bench_exe.addOptions("@benchmark", bench_opts);
-    bench_exe.override_dest_dir = .{ .custom = b.pathJoin(&.{ "bench", @tagName(optimize), @tagName(alloc) }) };
 
     return bench_exe;
 }
