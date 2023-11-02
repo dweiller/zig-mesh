@@ -69,8 +69,8 @@ page_count: usize,
 slot_count: usize,
 fd: std.os.fd_t,
 bitset: BitSet,
-next: Ptr,
-prev: Ptr,
+next: *align(params.slab_alignment) Slab,
+prev: *align(params.slab_alignment) Slab,
 
 comptime {
     assert(@sizeOf(Slab) <= page_size);
